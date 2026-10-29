@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "website-scraper"
+version = "1.1.0"
+description = "A free, self-hosted, developer-first web scraper and crawler with Markdown/JSON output."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Website Scraper contributors" }]
+keywords = ["scraper", "crawler", "markdown", "rag", "llm", "web-scraping"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Framework :: Flask",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Text Processing :: Markup :: Markdown",
+]
+dependencies = [
+  "requests>=2.31.0",
+  "beautifulsoup4>=4.12.0",
+  "lxml>=4.9.0",
+  "markdownify>=0.13.1",
+  "Flask>=3.0.0",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.40.0"]
+server = ["gunicorn>=21.2.0"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+website-scraper = "Backend.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/website-scraper"
+Issues = "https://github.com/yourusername/website-scraper/issues"
+Documentation = "https://github.com/yourusername/website-scraper#readme"
+
+[tool.setuptools]
+packages = ["Backend"]
+py-modules = ["main"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

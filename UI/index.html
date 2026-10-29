@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Web Scraper Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%233b82f6%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22><path d=%22M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07L19.07 4.93%22/><circle cx=%2212%22 cy=%2212%22 r=%224%22/></svg>">
+</head>
+<body>
+  <a href="#workspace" class="skip-link">Skip to main content</a>
+  <div class="app-shell" id="appShell">
+    <!-- Left Navigation Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <!-- Brand Header -->
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">Web Scraper</span>
+          </div>
+        </div>
+        <button type="button" id="sidebarCollapseBtn" class="collapse-btn" title="Toggle Sidebar" aria-label="Toggle Sidebar">
+          <svg class="icon-desktop-collapse" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="11 17 6 12 11 7"/>
+            <polyline points="18 17 13 12 18 7"/>
+          </svg>
+          <svg class="icon-mobile-close" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Navigation Menus -->
+      <nav class="sidebar-nav" aria-label="Main Navigation">
+        <!-- NAVIGATION GROUP 1: ENGINE -->
+        <div class="nav-section">
+          <div class="section-title">
+            <span class="section-label">Engine</span>
+          </div>
+          <ul class="nav-list">
+            <li>
+              <button type="button" class="nav-link active" aria-current="page" data-view="viewCrawlSetup"
+                      data-title="Crawl Setup"
+                      data-category="Engine"
+                      data-subtitle="Configure target seeds, crawl depth, domain rules, and limits.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                  </svg>
+                </span>
+                <span class="link-label">Crawl Setup</span>
+              </button>
+            </li>
+
+            <li>
+              <button type="button" class="nav-link" data-view="viewExtraction"
+                      data-title="Content &amp; Extraction"
+                      data-category="Engine"
+                      data-subtitle="Set output format, CSS selector isolation, noise stripping, and RAG chunking.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                    <line x1="16" y1="17" x2="8" y2="17"/>
+                  </svg>
+                </span>
+                <span class="link-label">Content &amp; Extraction</span>
+              </button>
+            </li>
+
+            <li>
+              <button type="button" class="nav-link" data-view="viewFilters"
+                      data-title="URL Filters"
+                      data-category="Engine"
+                      data-subtitle="Include or exclude specific URL patterns using globs or regular expressions.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                  </svg>
+                </span>
+                <span class="link-label">URL Filters</span>
+              </button>
+            </li>
+
+            <li>
+              <button type="button" class="nav-link" data-view="viewInspector"
+                      data-title="URL Inspector"
+                      data-category="Engine"
+                      data-subtitle="Test scrape any single URL in real time to verify selectors and content extraction.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                </span>
+                <span class="link-label">URL Inspector</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <!-- NAVIGATION GROUP 2: ACTIVITY -->
+        <div class="nav-section">
+          <div class="section-title">
+            <span class="section-label">Activity</span>
+          </div>
+          <ul class="nav-list">
+            <li>
+              <button type="button" class="nav-link" data-view="viewMonitor"
+                      data-title="Live Monitor"
+                      data-category="Activity"
+                      data-subtitle="Real-time crawling telemetry, throughput metrics, and streaming console.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                  </svg>
+                </span>
+                <span class="link-label">Live Monitor</span>
+                <span id="navLogBadge" class="nav-counter">0</span>
+              </button>
+            </li>
+
+            <li>
+              <button type="button" class="nav-link" data-view="viewPages"
+                      data-title="Saved Pages"
+                      data-category="Activity"
+                      data-subtitle="Search, view, and inspect all extracted documents stored to disk.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="2"/>
+                    <path d="M3 9h18"/><path d="M9 21V9"/>
+                  </svg>
+                </span>
+                <span class="link-label">Saved Pages</span>
+                <span id="navPageBadge" class="nav-counter">0</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <!-- NAVIGATION GROUP 3: STORAGE -->
+        <div class="nav-section">
+          <div class="section-title">
+            <span class="section-label">Storage</span>
+          </div>
+          <ul class="nav-list">
+            <li>
+              <button type="button" class="nav-link" data-view="viewOutput"
+                      data-title="Output Directory"
+                      data-category="Storage"
+                      data-subtitle="Manage output files, inspect manifest summary, and download ZIP dataset.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </span>
+                <span class="link-label">Output Directory</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <!-- NAVIGATION GROUP 4: TEMPLATES -->
+        <div class="nav-section">
+          <div class="section-title">
+            <span class="section-label">Templates</span>
+          </div>
+          <ul class="nav-list">
+            <li>
+              <button type="button" class="nav-link" data-view="viewPresets"
+                      data-title="Presets &amp; Recipes"
+                      data-category="Templates"
+                      data-subtitle="One-click scraping configurations for AI/RAG docs, catalogs, and deep knowledge bases.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                  </svg>
+                </span>
+                <span class="link-label">Presets &amp; Recipes</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+      </nav>
+
+      <!-- Sidebar Status Footer -->
+      <div class="sidebar-status">
+        <div class="status-indicator">
+          <span class="pulse-dot" id="sidebarPulse"></span>
+          <span class="status-state" id="sidebarStatusText">Engine Ready</span>
+        </div>
+        <div class="output-pill" id="sidebarOutputDir" title="Current Output Directory">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span id="sidebarOutputLabel">./output</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Mobile Scrim Overlay -->
+    <div class="scrim" id="sidebarScrim" hidden></div>
+
+    <!-- Main Application Column -->
+    <div class="main-column">
+      <!-- Universal Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" id="mobileMenuBtn" class="icon-btn mobile-menu-btn" aria-label="Open Navigation Menu" aria-expanded="false" aria-controls="sidebar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+
+          <nav class="breadcrumb-block" aria-label="Breadcrumbs">
+            <div class="breadcrumb-trail">
+              <span class="breadcrumb-category" id="breadcrumbCategory">Engine</span>
+              <span class="breadcrumb-separator">/</span>
+              <h1 class="view-title" id="topbarViewTitle">Crawl Setup</h1>
+            </div>
+            <span class="view-subtitle" id="topbarViewSubtitle">Configure target seeds, crawl depth, domain rules, and limits.</span>
+          </nav>
+        </div>
+
+        <!-- Global Live Status & Action Center -->
+        <div class="topbar-right">
+          <!-- Active Mini Ticker (visible when running) -->
+          <div class="mini-ticker" id="topbarTicker" style="display: none;">
+            <span class="ticker-pulse"></span>
+            <span class="ticker-text" id="topbarTickerText">Starting crawl...</span>
+          </div>
+
+          <!-- Status Badge -->
+          <div class="status-pill status-idle" id="statusPill" role="status" aria-live="polite">
+            <span class="status-pill-dot"></span>
+            <span id="statusText">Idle</span>
+          </div>
+
+          <!-- Global Action Buttons -->
+          <div class="action-group">
+            <button type="button" id="globalStartBtn" class="btn btn-primary topbar-btn" aria-label="Start Crawl Job">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="6 3 20 12 6 21 6 3"/>
+              </svg>
+              <span>Start Crawl</span>
+            </button>
+
+            <button type="button" id="globalStopBtn" class="btn btn-danger topbar-btn" disabled aria-label="Stop Active Crawl Job">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="14" height="14" x="5" y="5" rx="2"/>
+              </svg>
+              <span>Stop</span>
+            </button>
+          </div>
+
+          <div class="topbar-divider"></div>
+
+          <!-- Theme Toggle -->
+          <button id="themeToggleBtn" class="icon-btn theme-toggle" title="Toggle Theme" aria-label="Switch to light theme">
+            <svg id="themeIconSun" class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2"/><path d="M12 20v2"/>
+              <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
+              <path d="M2 12h2"/><path d="M20 12h2"/>
+              <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+            </svg>
+            <svg id="themeIconMoon" class="icon-moon hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Workspace Container -->
+      <main class="workspace" id="workspace" tabindex="-1">
+        <form id="crawlerForm">
+          <!-- ==========================================
+               VIEW 1: CRAWL JOB SETUP
+               ========================================== -->
+          <section id="viewCrawlSetup" class="content-view active">
+            <div class="view-container">
+              <!-- Grid Layout -->
+              <div class="form-layout-grid">
+                <!-- Primary: Seed URLs -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title"><label for="urlInput" style="cursor:pointer;">Seed URLs</label></h2>
+                      <span class="card-hint" id="seedUrlHint">One URL per line or separated by commas</span>
+                    </div>
+                    <div class="card-actions">
+                      <button type="button" class="btn btn-secondary btn-sm" id="loadSampleUrlsBtn">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                        </svg>
+                        <span>Load Sample Sites</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="textarea-wrapper">
+                      <textarea
+                        id="urlInput"
+                        class="custom-textarea"
+                        aria-describedby="seedUrlHint"
+                        aria-required="true"
+                        rows="6"
+                        placeholder="https://example.com&#10;https://docs.python.org/3/&#10;https://books.toscrape.com"
+                        required
+                        spellcheck="false"
+                      ></textarea>
+                    </div>
+
+                    <!-- Preset Chips -->
+                    <div class="presets-row">
+                      <span class="preset-label">Quick test:</span>
+                      <div class="chip-container" role="group" aria-label="Sample seed URLs">
+                        <button type="button" class="sample-chip" data-url="https://books.toscrape.com">books.toscrape.com</button>
+                        <button type="button" class="sample-chip" data-url="https://quotes.toscrape.com">quotes.toscrape.com</button>
+                        <button type="button" class="sample-chip" data-url="https://example.com">example.com</button>
+                        <button type="button" class="sample-chip" data-url="https://httpbin.org/html">httpbin.org</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Limits & Traversal -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Traversal &amp; Limits</h2>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <!-- Crawl Depth Slider -->
+                    <div class="input-block">
+                      <div class="input-head">
+                        <label for="depthInput" class="input-label">Crawl Depth</label>
+                        <span class="badge-accent" id="depthDisplay">Depth 1 (Seed + 1 Click)</span>
+                      </div>
+                      <input type="range" id="depthInput" class="custom-range" min="0" max="5" step="1" value="1" aria-valuemin="0" aria-valuemax="5" aria-valuenow="1" aria-valuetext="Depth 1 (Seed + 1 Click)" aria-describedby="depthHint" />
+                      <div class="range-scale">
+                        <span>0 (Seeds only)</span>
+                        <span>1</span>
+                        <span>2</span>
+                        <span>3</span>
+                        <span>4</span>
+                        <span>5</span>
+                      </div>
+                      <p class="input-desc" id="depthHint">Crawl seed pages and all direct links discovered on those pages.</p>
+                    </div>
+
+                    <!-- Max Pages Cap -->
+                    <div class="input-block">
+                      <div class="input-head">
+                        <label for="maxPagesInput" class="input-label">Maximum Pages Cap</label>
+                      </div>
+                      <div class="pill-input-row">
+                        <input type="number" id="maxPagesInput" class="custom-input" min="1" max="5000" value="100" required aria-required="true" />
+                        <div class="pill-group" role="group" aria-label="Max pages limit presets">
+                          <button type="button" class="preset-pill" data-pages="20">20</button>
+                          <button type="button" class="preset-pill" data-pages="50">50</button>
+                          <button type="button" class="preset-pill active" data-pages="100">100</button>
+                          <button type="button" class="preset-pill" data-pages="250">250</button>
+                          <button type="button" class="preset-pill" data-pages="500">500</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Scope & Boundary Controls -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Scope &amp; Safety</h2>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <label class="toggle-card">
+                      <input type="checkbox" id="sameDomainInput" checked role="switch" aria-checked="true" />
+                      <div class="toggle-track">
+                        <span class="toggle-thumb"></span>
+                      </div>
+                      <div class="toggle-info">
+                        <span class="toggle-title">Strict Same-Domain Traversal</span>
+                        <span class="toggle-desc">Never follow links beyond the seed domain hostname.</span>
+                      </div>
+                    </label>
+
+                    <label class="toggle-card">
+                      <input type="checkbox" id="respectRobotsInput" checked role="switch" aria-checked="true" />
+                      <div class="toggle-track">
+                        <span class="toggle-thumb"></span>
+                      </div>
+                      <div class="toggle-info">
+                        <span class="toggle-title">Respect robots.txt</span>
+                        <span class="toggle-desc">Honor crawler guidelines and disallow rules politely.</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Storage Destination -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title"><label for="outputDirInput" style="cursor:pointer;">Output Storage Destination</label></h2>
+                      <span class="card-hint" id="outputDirHint">Extracted files and index manifest will be saved here</span>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="path-picker-group">
+                      <div class="path-display">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <input type="text" id="outputDirInput" class="custom-input path-input" value="./output" spellcheck="false" placeholder="./output" aria-describedby="outputDirHint" />
+                      </div>
+                      <button type="button" id="browseDirBtn" class="btn btn-secondary">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+                        </svg>
+                        <span>Browse...</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Footer Bar -->
+              <div class="view-footer">
+                <div class="footer-left">
+                  <span class="summary-text" id="setupSummary">Ready to crawl with depth 1, max 100 pages.</span>
+                </div>
+                <div class="footer-right">
+                  <button type="button" class="btn btn-secondary" id="resetFormBtn">Reset Defaults</button>
+                  <button type="submit" class="btn btn-primary" id="submitCrawlBtn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polygon points="6 3 20 12 6 21 6 3"/>
+                    </svg>
+                    <span>Launch Crawl Job</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ==========================================
+               VIEW 2: CONTENT & EXTRACTION
+               ========================================== -->
+          <section id="viewExtraction" class="content-view">
+            <div class="view-container">
+              <div class="form-layout-grid">
+                <!-- Output Format Options -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Output Format</h2>
+                      <span class="card-hint">Choose how extracted documents are structured and stored</span>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <fieldset style="border:none;padding:0;margin:0;"><legend class="visually-hidden">Output Document Format</legend><div class="format-grid">
+                      <!-- Format 1: Markdown -->
+                      <label class="format-card active" data-format="md">
+                        <input type="radio" name="formatOption" value="md" checked />
+                        <div class="format-head">
+                          <span class="format-name">Markdown (.md)</span>
+                          <span class="format-badge">RAG / LLM</span>
+                        </div>
+                        <p class="format-desc">Preserves headings, bullet lists, markdown tables, and links. Best for vector databases and AI context.</p>
+                      </label>
+
+                      <!-- Format 2: Plain Text -->
+                      <label class="format-card" data-format="txt">
+                        <input type="radio" name="formatOption" value="txt" />
+                        <div class="format-head">
+                          <span class="format-name">Plain Text (.txt)</span>
+                          <span class="format-badge">Clean</span>
+                        </div>
+                        <p class="format-desc">Raw readable text with HTML tags, scripts, banners, and styling completely stripped.</p>
+                      </label>
+
+                      <!-- Format 3: JSON -->
+                      <label class="format-card" data-format="json">
+                        <input type="radio" name="formatOption" value="json" />
+                        <div class="format-head">
+                          <span class="format-name">JSON Document</span>
+                          <span class="format-badge">Structured</span>
+                        </div>
+                        <p class="format-desc">Structured metadata: title, original URL, timestamp, word count, cleaned text, and markdown.</p>
+                      </label>
+
+                      <!-- Format 4: JSONL -->
+                      <label class="format-card" data-format="jsonl">
+                        <input type="radio" name="formatOption" value="jsonl" />
+                        <div class="format-head">
+                          <span class="format-name">JSON Lines (.jsonl)</span>
+                          <span class="format-badge">Streaming</span>
+                        </div>
+                        <p class="format-desc">One record per line. Best for batch pipelines, Elasticsearch, and BigQuery data loaders.</p>
+                      </label>
+                    </div></fieldset>
+                    <input type="hidden" id="formatInput" value="md" />
+                  </div>
+                </div>
+
+                <!-- CSS Selectors Card -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">CSS Target Selectors</h2>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="input-block">
+                      <label for="selectorInput" class="input-label">Content Selector (Optional)</label>
+                      <input type="text" id="selectorInput" class="custom-input" placeholder="article, main, .post-content, #content" />
+                      <p class="input-desc">Extracts only the element matching this selector. Leave empty to process full page body.</p>
+                    </div>
+
+                    <div class="input-block">
+                      <label for="excludeSelectorInput" class="input-label">Exclude Selectors</label>
+                      <input type="text" id="excludeSelectorInput" class="custom-input" placeholder="nav, footer, .ad, aside, .cookie-banner" />
+                      <p class="input-desc">Comma-separated selectors stripped before extraction.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- RAG Chunking Options -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Text Chunking (RAG / AI)</h2>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="input-block">
+                      <label for="chunkSizeInput" class="input-label">Chunk Size (Characters)</label>
+                      <input type="number" id="chunkSizeInput" class="custom-input" min="0" max="10000" step="100" value="0" />
+                      <p class="input-desc">Set to 0 to save full pages. Use 1000–1500 for vector embeddings.</p>
+                    </div>
+
+                    <div class="input-block">
+                      <label for="chunkOverlapInput" class="input-label">Chunk Overlap (Characters)</label>
+                      <input type="number" id="chunkOverlapInput" class="custom-input" min="0" max="1000" step="50" value="200" />
+                      <p class="input-desc">Overlap between chunks to preserve context continuity across boundaries.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ==========================================
+               VIEW 3: URL FILTERS & RULES
+               ========================================== -->
+          <section id="viewFilters" class="content-view">
+            <div class="view-container">
+              <div class="form-layout-grid">
+                <!-- Include Patterns -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Allow-list Patterns</h2>
+                      <span class="card-hint">Only follow matching URLs</span>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="input-block">
+                      <label for="includePatternInput" class="input-label">Include URL Patterns</label>
+                      <input type="text" id="includePatternInput" class="custom-input" placeholder="*/docs/*, */blog/*, re:^https://.+/api/.*" />
+                      <p class="input-desc">Comma-separated patterns. Supports wildcards (*) or regular expressions (re:).</p>
+                    </div>
+
+                    <div class="pattern-samples">
+                      <span class="sample-label">Examples:</span>
+                      <button type="button" class="preset-tag" data-target="includePatternInput" data-pattern="*/docs/*">*/docs/*</button>
+                      <button type="button" class="preset-tag" data-target="includePatternInput" data-pattern="*/blog/*">*/blog/*</button>
+                      <button type="button" class="preset-tag" data-target="includePatternInput" data-pattern="*/catalogue/*">*/catalogue/*</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Exclude Patterns -->
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Block-list Patterns</h2>
+                      <span class="card-hint">Skip matching URLs</span>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="input-block">
+                      <label for="excludePatternInput" class="input-label">Exclude URL Patterns</label>
+                      <input type="text" id="excludePatternInput" class="custom-input" placeholder="*login*, *cart*, *.pdf, */tag/*" />
+                      <p class="input-desc">Exclusions take absolute priority over includes.</p>
+                    </div>
+
+                    <div class="pattern-samples">
+                      <span class="sample-label">Quick Add:</span>
+                      <button type="button" class="preset-tag" data-target="excludePatternInput" data-pattern="*login*, *signin*, *auth*">Auth Pages</button>
+                      <button type="button" class="preset-tag" data-target="excludePatternInput" data-pattern="*cart*, *checkout*">Cart / Checkout</button>
+                      <button type="button" class="preset-tag" data-target="excludePatternInput" data-pattern="*.pdf, *.zip, *.exe">Binaries</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Live Pattern Tester Card -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Filter Rule Tester</h2>
+                      <span class="card-hint">Evaluate a URL against active include and exclude patterns</span>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="tester-row">
+                      <label for="testUrlInput" class="visually-hidden">Test URL for pattern matching</label><input type="url" id="testUrlInput" class="custom-input" placeholder="Enter a test URL (e.g. https://example.com/docs/getting-started)..." />
+                      <button type="button" id="evalPatternBtn" class="btn btn-secondary">Test Match</button>
+                    </div>
+                    <div id="testResultBox" class="test-result-box" role="status" aria-live="polite" style="display: none;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </form>
+
+        <!-- ==========================================
+             VIEW 4: SINGLE URL INSPECTOR
+             ========================================== -->
+        <section id="viewInspector" class="content-view">
+          <div class="view-container">
+            <div class="card card-inspector">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h2 class="card-title">Single URL Inspector</h2>
+                  <span class="card-hint">Test extraction selectors, JS rendering, and markdown output on any page</span>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="inspector-controls">
+                  <div class="inspector-url-row">
+                    <div class="inspector-input-wrap">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                      </svg>
+                      <label for="inspectorUrl" class="visually-hidden">URL to inspect</label><input type="url" id="inspectorUrl" class="custom-input inspector-input" placeholder="https://example.com/article" value="https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html" />
+                    </div>
+                    <button type="button" id="inspectScrapeBtn" class="btn btn-primary">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                      </svg>
+                      <span>Inspect Page</span>
+                    </button>
+                  </div>
+
+                  <div class="inspector-options-row">
+                    <div class="opt-group">
+                      <span class="opt-label">Format:</span>
+                      <div class="pill-group" role="group" aria-label="Max pages limit presets">
+                        <button type="button" class="preset-pill active" data-inspect-format="markdown">Markdown</button>
+                        <button type="button" class="preset-pill" data-inspect-format="text">Plain Text</button>
+                        <button type="button" class="preset-pill" data-inspect-format="json">JSON</button>
+                        <button type="button" class="preset-pill" data-inspect-format="html">HTML</button>
+                      </div>
+                    </div>
+
+                    <label class="toggle-control-mini">
+                      <input type="checkbox" id="inspectorJsToggle" role="switch" aria-checked="false" />
+                      <span class="toggle-slider-mini"></span>
+                      <span>Render JavaScript (Playwright)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Inspector Results Panel -->
+                <div class="inspector-result-panel">
+                  <div class="inspector-meta-bar" id="inspectorMetaBar" role="status" aria-live="polite" style="display: none;">
+                    <span class="meta-tag" id="inspectorStatusTag">Status: 200 OK</span>
+                    <span class="meta-item">Duration: <strong id="inspectorTime">0.0s</strong></span>
+                    <span class="meta-item">Size: <strong id="inspectorSize">0 KB</strong></span>
+                    <div class="inspector-actions">
+                      <button type="button" class="btn btn-secondary btn-sm" id="inspectorCopyBtn">Copy Result</button>
+                    </div>
+                  </div>
+                  <pre class="inspector-preview-block" id="inspectorPreviewBlock" tabindex="0" role="region" aria-label="Extracted page output preview">Enter a URL above and click "Inspect Page" to preview extraction output.</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==========================================
+             VIEW 5: LIVE MONITOR & CONSOLE
+             ========================================== -->
+        <section id="viewMonitor" class="content-view">
+          <div class="view-container">
+            <!-- Telemetry Metrics Grid -->
+            <div class="telemetry-grid">
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Pages Crawled</span>
+                </div>
+                <div class="telemetry-val" id="monitorCrawledVal">0</div>
+                <div class="telemetry-sub">Total HTTP fetches</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Saved to Disk</span>
+                </div>
+                <div class="telemetry-val text-green" id="monitorSavedVal">0</div>
+                <div class="telemetry-sub">Clean documents written</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Skipped URLs</span>
+                </div>
+                <div class="telemetry-val text-muted" id="monitorSkippedVal">0</div>
+                <div class="telemetry-sub">Duplicates, media &amp; filtered</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Elapsed Time</span>
+                </div>
+                <div class="telemetry-val text-accent" id="monitorElapsedVal">0.0s</div>
+                <div class="telemetry-sub">Job active duration</div>
+              </div>
+            </div>
+
+            <!-- Active URL Ticker Box -->
+            <div class="active-url-bar" id="monitorTickerBar">
+              <div class="ticker-radar">
+                <span class="radar-center"></span>
+              </div>
+              <div class="ticker-info">
+                <span class="ticker-depth-tag" id="monitorDepthTag">Depth 0</span>
+                <span class="ticker-url-text" id="monitorUrlText">Engine idle. Ready to crawl.</span>
+              </div>
+            </div>
+
+            <!-- Terminal Console Card -->
+            <div class="card terminal-card">
+              <div class="card-header terminal-header">
+                <div class="terminal-title">
+                  <h2 class="card-title">Console Output</h2>
+                  <span class="terminal-counter" id="terminalCounter">0 logs</span>
+                </div>
+
+                <div class="terminal-toolbar">
+                  <!-- Level Filter -->
+                  <div class="filter-pills">
+                    <button type="button" class="level-pill active" data-level="ALL">All</button>
+                    <button type="button" class="level-pill" data-level="INFO">Info</button>
+                    <button type="button" class="level-pill" data-level="WARN">Warn</button>
+                    <button type="button" class="level-pill" data-level="ERROR">Error</button>
+                  </div>
+
+                  <label class="checkbox-label" title="Keep console scrolled to newest output">
+                    <input type="checkbox" id="terminalAutoScroll" role="switch" aria-checked="true" checked />
+                    <span>Auto-scroll</span>
+                  </label>
+
+                  <button type="button" id="terminalClearBtn" class="btn btn-secondary btn-sm" title="Clear console">
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div class="terminal-body" id="terminalConsole" tabindex="0" role="log" aria-label="Crawler terminal console log" aria-live="polite">
+                <div class="log-row log-system">
+                  <span class="log-ts">00:00:00</span>
+                  <span class="log-tag">SYSTEM</span>
+                  <span class="log-content">Crawler engine initialized and ready.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==========================================
+             VIEW 6: SAVED PAGES CATALOG
+             ========================================== -->
+        <section id="viewPages" class="content-view">
+          <div class="view-container">
+            <div class="card table-card">
+              <div class="card-header table-header">
+                <div class="table-search-wrap">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                  <label for="catalogSearchInput" class="visually-hidden">Filter saved documents</label><input type="text" id="catalogSearchInput" class="custom-input table-search" placeholder="Filter by title, URL, or filename..." />
+                </div>
+                <div class="table-meta">
+                  <span class="meta-label">Total Documents: <strong id="catalogTotalCount">0</strong></span>
+                  <button type="button" id="refreshCatalogBtn" class="btn btn-secondary btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                    </svg>
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="table-scroll-container">
+                <table class="data-table" aria-label="Saved documents catalog">
+                  <thead>
+                    <tr>
+                      <th scope="col" style="width: 40%;">Title &amp; Source URL</th>
+                      <th scope="col" style="width: 12%;">Depth</th>
+                      <th scope="col" style="width: 24%;">File Name</th>
+                      <th scope="col" style="width: 11%;">Size</th>
+                      <th scope="col" style="width: 13%; text-align: right;">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="catalogTableBody">
+                    <tr class="empty-state-row">
+                      <td colspan="5">
+                        <div class="empty-box">
+                          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                          </svg>
+                          <h4>No documents saved yet</h4>
+                          <p>Start a crawl job or test an individual URL in the Inspector to see extracted pages here.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==========================================
+             VIEW 7: OUTPUT STORAGE & EXPORT
+             ========================================== -->
+        <section id="viewOutput" class="content-view">
+          <div class="view-container">
+            <!-- Storage Metrics Cards -->
+            <div class="telemetry-grid">
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Security</span>
+                </div>
+                <div class="telemetry-path" id="outputFolderLabel">No Server Side Storage</div>
+                <div class="telemetry-sub">Files will be discarded after each session</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Total Files</span>
+                </div>
+                <div class="telemetry-val" id="outputTotalFilesVal">0</div>
+                <div class="telemetry-sub">Scraped documents</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Disk Storage</span>
+                </div>
+                <div class="telemetry-val text-accent" id="outputTotalSizeVal">0.0 KB</div>
+                <div class="telemetry-sub">Total dataset byte size</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Manifest Index</span>
+                </div>
+                <div class="telemetry-val text-green" id="outputManifestVal">None</div>
+                <div class="telemetry-sub">index.json status</div>
+              </div>
+            </div>
+
+            <!-- Directory File Explorer -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h2 class="card-title">Storage Files</h2>
+                  <span class="card-hint">All crawled items in output folder</span>
+                </div>
+                <div class="card-actions">
+                  <button type="button" id="refreshOutputListBtn" class="btn btn-secondary btn-sm">Refresh</button>
+                  <button type="button" id="downloadZipBtn" class="btn btn-primary btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    <span>Download ZIP</span>
+                  </button>
+                  <button type="button" id="clearOutputBtn" class="btn btn-outline-danger btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    <span>Purge Output</span>
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="file-list-wrap" id="outputFileList" tabindex="0" role="region" aria-label="Output storage files list">
+                  <p class="empty-hint">No files in directory.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==========================================
+             VIEW 8: PRESETS & RECIPES
+             ========================================== -->
+        <section id="viewPresets" class="content-view">
+          <div class="view-container">
+            <div class="preset-cards-grid">
+              <!-- Recipe 1 -->
+              <div class="recipe-card" data-preset="rag">
+                <div class="recipe-head">
+                  <h3 class="recipe-title">AI / RAG Knowledge Base</h3>
+                  <span class="tag">Markdown</span>
+                </div>
+                <p class="recipe-desc">Generates clean Markdown files with headers, links, and code blocks preserved. Strips navigation, headers, footers, and banners.</p>
+                <div class="recipe-tags">
+                  <span class="tag-meta">Depth 2</span>
+                  <span class="tag-meta">Chunking 1500 chars</span>
+                  <span class="tag-meta">Noise Stripped</span>
+                </div>
+                <button type="button" class="btn btn-secondary apply-recipe-btn" data-preset="rag">Apply Preset</button>
+              </div>
+
+              <!-- Recipe 2 -->
+              <div class="recipe-card" data-preset="catalog">
+                <div class="recipe-head">
+                  <h3 class="recipe-title">E-Commerce Catalog</h3>
+                  <span class="tag">JSON</span>
+                </div>
+                <p class="recipe-desc">Configured for product pages. Skips cart, checkout, login links, and account pages while following pagination.</p>
+                <div class="recipe-tags">
+                  <span class="tag-meta">Depth 2</span>
+                  <span class="tag-meta">JSON Document</span>
+                  <span class="tag-meta">Cart/Login Blocked</span>
+                </div>
+                <button type="button" class="btn btn-secondary apply-recipe-btn" data-preset="catalog">Apply Preset</button>
+              </div>
+
+              <!-- Recipe 3 -->
+              <div class="recipe-card" data-preset="seedsonly">
+                <div class="recipe-head">
+                  <h3 class="recipe-title">Exact Seed URLs Only</h3>
+                  <span class="tag">Plain Text</span>
+                </div>
+                <p class="recipe-desc">Fetches only the specific list of seed URLs you provide without following any internal or outbound links.</p>
+                <div class="recipe-tags">
+                  <span class="tag-meta">Depth 0</span>
+                  <span class="tag-meta">No Link Crawling</span>
+                  <span class="tag-meta">Fast Snapshot</span>
+                </div>
+                <button type="button" class="btn btn-secondary apply-recipe-btn" data-preset="seedsonly">Apply Preset</button>
+              </div>
+
+              <!-- Recipe 4 -->
+              <div class="recipe-card" data-preset="deepdocs">
+                <div class="recipe-head">
+                  <h3 class="recipe-title">Technical Documentation</h3>
+                  <span class="tag">Markdown</span>
+                </div>
+                <p class="recipe-desc">Follows nested documentation guides with include pattern <code>*/docs/*</code>, depth 3, and strips navigation sidebars.</p>
+                <div class="recipe-tags">
+                  <span class="tag-meta">Depth 3</span>
+                  <span class="tag-meta">Target &lt;article&gt;</span>
+                  <span class="tag-meta">High Page Cap</span>
+                </div>
+                <button type="button" class="btn btn-secondary apply-recipe-btn" data-preset="deepdocs">Apply Preset</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Slide-Over Drawer for Document Preview -->
+  <div class="drawer-overlay" id="drawerOverlay" hidden></div>
+  <aside class="drawer-panel" id="previewDrawer" role="dialog" aria-modal="true" aria-hidden="true" inert aria-labelledby="drawerTitle">
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <span class="drawer-depth-badge" id="drawerDepth">Depth 0</span>
+        <h3 class="drawer-title" id="drawerTitle">Document Title</h3>
+        <a href="#" target="_blank" rel="noopener noreferrer" class="drawer-url" id="drawerUrl">https://example.com</a>
+      </div>
+      <button type="button" id="closeDrawerBtn" class="icon-btn" title="Close Preview (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="drawer-toolbar">
+      <div class="drawer-stats">
+        <span>File: <code id="drawerFileName">file.txt</code></span>
+        <span>Size: <strong id="drawerFileSize">0 KB</strong></span>
+        <span>Lines: <strong id="drawerLineCount">0</strong></span>
+      </div>
+      <button type="button" id="drawerCopyBtn" class="btn btn-secondary btn-sm">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+        </svg>
+        <span id="drawerCopyText">Copy Content</span>
+      </button>
+    </div>
+
+    <div class="drawer-content">
+      <pre class="drawer-pre" id="drawerContent" tabindex="0" role="region" aria-label="Document content preview">Loading document preview...</pre>
+    </div>
+  </aside>
+
+  <!-- Toast Notification Center -->
+  <div id="toastContainer" class="toast-hub" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
