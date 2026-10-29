@@ -39,7 +39,7 @@
               <button type="button" class="nav-link active" aria-current="page" data-view="viewCrawlSetup"
                       data-title="Crawl Setup"
                       data-category="Engine"
-                      data-subtitle="Configure target seeds, crawl depth, domain rules, and limits.">
+                      data-subtitle="Set URLs and crawl limits.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/>
@@ -52,9 +52,9 @@
 
             <li>
               <button type="button" class="nav-link" data-view="viewExtraction"
-                      data-title="Content &amp; Extraction"
+                      data-title="Extraction"
                       data-category="Engine"
-                      data-subtitle="Set output format, CSS selector isolation, noise stripping, and RAG chunking.">
+                      data-subtitle="Choose formats and selectors.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -63,7 +63,7 @@
                     <line x1="16" y1="17" x2="8" y2="17"/>
                   </svg>
                 </span>
-                <span class="link-label">Content &amp; Extraction</span>
+                <span class="link-label">Extraction</span>
               </button>
             </li>
 
@@ -71,7 +71,7 @@
               <button type="button" class="nav-link" data-view="viewFilters"
                       data-title="URL Filters"
                       data-category="Engine"
-                      data-subtitle="Include or exclude specific URL patterns using globs or regular expressions.">
+                      data-subtitle="Control which URLs are crawled.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
@@ -85,7 +85,7 @@
               <button type="button" class="nav-link" data-view="viewInspector"
                       data-title="URL Inspector"
                       data-category="Engine"
-                      data-subtitle="Test scrape any single URL in real time to verify selectors and content extraction.">
+                      data-subtitle="Preview a page before crawling.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="11" cy="11" r="8"/>
@@ -108,7 +108,7 @@
               <button type="button" class="nav-link" data-view="viewMonitor"
                       data-title="Live Monitor"
                       data-category="Activity"
-                      data-subtitle="Real-time crawling telemetry, throughput metrics, and streaming console.">
+                      data-subtitle="Track crawl progress and activity.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -123,7 +123,7 @@
               <button type="button" class="nav-link" data-view="viewPages"
                       data-title="Saved Pages"
                       data-category="Activity"
-                      data-subtitle="Search, view, and inspect all extracted documents stored to disk.">
+                      data-subtitle="Browse extracted pages.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect width="18" height="18" x="3" y="3" rx="2"/>
@@ -147,7 +147,7 @@
               <button type="button" class="nav-link" data-view="viewOutput"
                       data-title="Output Directory"
                       data-category="Storage"
-                      data-subtitle="Manage output files, inspect manifest summary, and download ZIP dataset.">
+                      data-subtitle="Manage files and download a ZIP.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -167,15 +167,15 @@
           <ul class="nav-list">
             <li>
               <button type="button" class="nav-link" data-view="viewPresets"
-                      data-title="Presets &amp; Recipes"
+                      data-title="Presets"
                       data-category="Templates"
-                      data-subtitle="One-click scraping configurations for AI/RAG docs, catalogs, and deep knowledge bases.">
+                      data-subtitle="Start with a saved configuration.">
                 <span class="link-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
                   </svg>
                 </span>
-                <span class="link-label">Presets &amp; Recipes</span>
+                <span class="link-label">Presets</span>
               </button>
             </li>
           </ul>
@@ -219,7 +219,7 @@
               <span class="breadcrumb-separator">/</span>
               <h1 class="view-title" id="topbarViewTitle">Crawl Setup</h1>
             </div>
-            <span class="view-subtitle" id="topbarViewSubtitle">Configure target seeds, crawl depth, domain rules, and limits.</span>
+            <span class="view-subtitle" id="topbarViewSubtitle">Set URLs and crawl limits.</span>
           </nav>
         </div>
 
@@ -287,7 +287,7 @@
                   <div class="card-header">
                     <div class="card-title-group">
                       <h2 class="card-title"><label for="urlInput" style="cursor:pointer;">Seed URLs</label></h2>
-                      <span class="card-hint" id="seedUrlHint">One URL per line or separated by commas</span>
+                      <span class="card-hint" id="seedUrlHint">One URL per line</span>
                     </div>
                     <div class="card-actions">
                       <button type="button" class="btn btn-secondary btn-sm" id="loadSampleUrlsBtn">
@@ -295,7 +295,7 @@
                           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
                           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
                         </svg>
-                        <span>Load Sample Sites</span>
+                        <span>Load samples</span>
                       </button>
                     </div>
                   </div>
@@ -330,7 +330,7 @@
                 <div class="card">
                   <div class="card-header">
                     <div class="card-title-group">
-                      <h2 class="card-title">Traversal &amp; Limits</h2>
+                      <h2 class="card-title">Crawl limits</h2>
                     </div>
                   </div>
                   <div class="card-body form-stack">
@@ -375,7 +375,7 @@
                 <div class="card">
                   <div class="card-header">
                     <div class="card-title-group">
-                      <h2 class="card-title">Scope &amp; Safety</h2>
+                      <h2 class="card-title">Crawl scope</h2>
                     </div>
                   </div>
                   <div class="card-body form-stack">
@@ -385,8 +385,7 @@
                         <span class="toggle-thumb"></span>
                       </div>
                       <div class="toggle-info">
-                        <span class="toggle-title">Strict Same-Domain Traversal</span>
-                        <span class="toggle-desc">Never follow links beyond the seed domain hostname.</span>
+                        <span class="toggle-title">Stay on the same domain</span>
                       </div>
                     </label>
 
@@ -397,7 +396,7 @@
                       </div>
                       <div class="toggle-info">
                         <span class="toggle-title">Respect robots.txt</span>
-                        <span class="toggle-desc">Honor crawler guidelines and disallow rules politely.</span>
+                        <span class="toggle-desc">Follow robots.txt rules.</span>
                       </div>
                     </label>
                   </div>
@@ -407,8 +406,8 @@
                 <div class="card card-wide">
                   <div class="card-header">
                     <div class="card-title-group">
-                      <h2 class="card-title"><label for="outputDirInput" style="cursor:pointer;">Output Storage Destination</label></h2>
-                      <span class="card-hint" id="outputDirHint">Extracted files and index manifest will be saved here</span>
+                      <h2 class="card-title"><label for="outputDirInput" style="cursor:pointer;">Save to</label></h2>
+                      <span class="card-hint" id="outputDirHint">Pages and index file</span>
                     </div>
                   </div>
                   <div class="card-body">
@@ -436,12 +435,12 @@
                   <span class="summary-text" id="setupSummary">Ready to crawl with depth 1, max 100 pages.</span>
                 </div>
                 <div class="footer-right">
-                  <button type="button" class="btn btn-secondary" id="resetFormBtn">Reset Defaults</button>
+                  <button type="button" class="btn btn-secondary" id="resetFormBtn">Reset</button>
                   <button type="submit" class="btn btn-primary" id="submitCrawlBtn">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                       <polygon points="6 3 20 12 6 21 6 3"/>
                     </svg>
-                    <span>Launch Crawl Job</span>
+                    <span>Start crawl</span>
                   </button>
                 </div>
               </div>
