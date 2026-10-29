@@ -24,7 +24,6 @@
   // Shell & Layout
   const appShell = document.getElementById("appShell");
   const sidebar = document.getElementById("sidebar");
-  const sidebarCollapseBtn = document.getElementById("sidebarCollapseBtn");
   const mobileMenuBtn = document.getElementById("mobileMenuBtn");
   const sidebarScrim = document.getElementById("sidebarScrim");
   const navLinks = document.querySelectorAll(".nav-link");
@@ -254,19 +253,12 @@
     if (isCollapsed && window.innerWidth > 1024) {
       appShell.classList.add("sidebar-collapsed");
     }
+    if (mobileMenuBtn && window.innerWidth > 1024) {
+      mobileMenuBtn.setAttribute("aria-expanded", String(!appShell.classList.contains("sidebar-collapsed")));
+    }
   }
 
-  sidebarCollapseBtn.addEventListener("click", () => {
-    if (window.innerWidth <= 1024) {
-      closeMobileSidebar();
-      return;
-    }
-    appShell.classList.toggle("sidebar-collapsed");
-    const collapsed = appShell.classList.contains("sidebar-collapsed");
-    localStorage.setItem("scrapper_sidebar_collapsed", String(collapsed));
-  });
-
-  // Mobile Menu
+  // Single navigation toggle: collapses the rail on desktop and opens the drawer on small screens.
   function openMobileSidebar() {
     sidebar.classList.add("mobile-open");
     sidebar.removeAttribute("inert");
@@ -279,12 +271,22 @@
   function closeMobileSidebar() {
     sidebar.classList.remove("mobile-open");
     sidebarScrim.hidden = true;
-    if (mobileMenuBtn) {
+    if (mobileMenuBtn && window.innerWidth <= 1024) {
       mobileMenuBtn.setAttribute("aria-expanded", "false");
     }
   }
 
-  mobileMenuBtn.addEventListener("click", openMobileSidebar);
+  mobileMenuBtn.addEventListener("click", () => {
+    if (window.innerWidth <= 1024) {
+      if (sidebar.classList.contains("mobile-open")) closeMobileSidebar();
+      else openMobileSidebar();
+      return;
+    }
+    appShell.classList.toggle("sidebar-collapsed");
+    const collapsed = appShell.classList.contains("sidebar-collapsed");
+    localStorage.setItem("scrapper_sidebar_collapsed", String(collapsed));
+    mobileMenuBtn.setAttribute("aria-expanded", String(!collapsed));
+  });
   sidebarScrim.addEventListener("click", closeMobileSidebar);
 
   // Responsive layout window resize handler
@@ -297,6 +299,7 @@
       } else {
         appShell.classList.remove("sidebar-collapsed");
       }
+      mobileMenuBtn.setAttribute("aria-expanded", String(!isCollapsed));
     } else {
       appShell.classList.remove("sidebar-collapsed");
     }
@@ -308,7 +311,9 @@
   // Depth slider interaction
   depthInput.addEventListener("input", (e) => {
     const val = parseInt(e.target.value, 10);
-    depthDisplay.textContent = `Depth ${val} (${val === 0 ? "Seeds only" : val === 1 ? "Seeds + 1 Click" : `Deep ${val}-Tier`})`;
+    depthInput.setAttribute("aria-valuenow", String(val));
+    depthInput.setAttribute("aria-valuetext", depthDescriptions[val] || `Depth ${val}`);
+    depthDisplay.textContent = String(val);
     depthHint.textContent = depthDescriptions[val] || `Depth level ${val}`;
     updateSetupSummary();
   });
@@ -505,7 +510,9 @@
   // Reset Defaults Button
   resetFormBtn.addEventListener("click", () => {
     depthInput.value = 1;
-    depthDisplay.textContent = "Depth 1 (Seed + 1 Click)";
+    depthInput.setAttribute("aria-valuenow", "1");
+    depthInput.setAttribute("aria-valuetext", depthDescriptions[1]);
+    depthDisplay.textContent = "1";
     depthHint.textContent = depthDescriptions[1];
     maxPagesInput.value = 100;
     document.querySelectorAll(".preset-pill[data-pages]").forEach((p) => {
@@ -1282,7 +1289,9 @@
 
       // Apply Limits & Scope
       depthInput.value = recipe.depth;
-      depthDisplay.textContent = `Depth ${recipe.depth} (${recipe.depth === 0 ? "Seeds only" : recipe.depth === 1 ? "Seeds + 1 Click" : `Deep ${recipe.depth}-Tier`})`;
+      depthInput.setAttribute("aria-valuenow", String(recipe.depth));
+      depthInput.setAttribute("aria-valuetext", depthDescriptions[recipe.depth] || `Depth ${recipe.depth}`);
+      depthDisplay.textContent = String(recipe.depth);
       depthHint.textContent = depthDescriptions[recipe.depth] || `Depth level ${recipe.depth}`;
 
       maxPagesInput.value = recipe.maxPages;
