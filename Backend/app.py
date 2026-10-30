@@ -22,7 +22,7 @@ from flask import Flask, Response, jsonify, request, send_file
 
 # Support relative or package import
 try:
-    from .config import DEFAULT_MAX_PAGES, MAX_DEPTH
+    from .config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from .crawler import Crawler
     from .extractor import extract_structured, validate_selectors
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
@@ -30,7 +30,7 @@ try:
     from .scraper import scrape_url
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:
-    from config import DEFAULT_MAX_PAGES, MAX_DEPTH
+    from config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from crawler import Crawler
     from extractor import extract_structured, validate_selectors
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
@@ -182,6 +182,7 @@ class JobState:
     chunk_overlap: int = 400
     respect_robots: bool = True
     concurrency: int = 5
+    delay: float = REQUEST_DELAY_SECONDS
     sitemap: bool = False
     sitemap_url: str = ""
     impersonate: str = "chrome"
@@ -281,6 +282,7 @@ class JobManager:
         chunk_overlap: int = 400,
         respect_robots: bool = True,
         concurrency: int = 5,
+        delay: float = REQUEST_DELAY_SECONDS,
         sitemap: bool = False,
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
@@ -307,6 +309,7 @@ class JobManager:
                 chunk_overlap=chunk_overlap,
                 respect_robots=respect_robots,
                 concurrency=concurrency,
+                delay=delay,
                 sitemap=sitemap,
                 sitemap_url=sitemap_url,
                 impersonate=impersonate or "chrome",
@@ -331,6 +334,7 @@ class JobManager:
                 chunk_overlap,
                 respect_robots,
                 concurrency,
+                delay,
                 sitemap,
                 sitemap_url,
                 impersonate,
@@ -369,6 +373,7 @@ class JobManager:
         chunk_overlap: int,
         respect_robots: bool,
         concurrency: int = 5,
+        delay: float = REQUEST_DELAY_SECONDS,
         sitemap: bool = False,
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
@@ -399,7 +404,8 @@ class JobManager:
         self.log(
             "INFO",
             f"Settings: depth={depth}, max_pages={max_pages}, same_domain={same_domain}, "
-            f"format={output_format}, include={include_patterns or 'any'}, exclude={exclude_patterns or 'none'}",
+            f"format={output_format}, concurrency={concurrency}, delay={delay}s, "
+            f"include={include_patterns or 'any'}, exclude={exclude_patterns or 'none'}",
         )
         if target_selector:
             self.log("INFO", f"Target selector: {target_selector}")
@@ -417,6 +423,7 @@ class JobManager:
             exclude_patterns=exclude_patterns,
             respect_robots=respect_robots,
             concurrency=concurrency,
+            delay=delay,
             sitemap=sitemap,
             sitemap_url=sitemap_url,
             impersonate=impersonate,
@@ -589,6 +596,12 @@ def api_scrape() -> Any:
     if impersonate == "none":
         impersonate = None
     proxy = str(data.get("proxy") or "").strip() or None
+    try:
+        delay = float(data.get("delay", 0.0))
+        if delay < 0:
+            return jsonify({"error": "delay cannot be negative."}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "delay must be a number."}), 400
 
     try:
         document = scrape_url(
@@ -601,6 +614,7 @@ def api_scrape() -> Any:
             chunk_overlap=chunk_overlap,
             impersonate=impersonate,
             proxy=proxy,
+            delay=delay,
             logger=app.logger,
         )
     except RobotsDisallowed as exc:
@@ -687,6 +701,12 @@ def api_scrape_start() -> Any:
 
     respect_robots = _as_bool(data.get("respect_robots"), True)
     concurrency = _as_int(data.get("concurrency", 5), 5)
+    try:
+        delay = float(data.get("delay", REQUEST_DELAY_SECONDS))
+        if delay < 0:
+            return jsonify({"error": "delay cannot be negative."}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "delay must be a number."}), 400
     sitemap = _as_bool(data.get("sitemap"), False)
     sitemap_url = str(data.get("sitemap_url") or "").strip()
     impersonate = data.get("impersonate", "chrome")
@@ -709,6 +729,7 @@ def api_scrape_start() -> Any:
         chunk_overlap=chunk_overlap,
         respect_robots=respect_robots,
         concurrency=concurrency,
+        delay=delay,
         sitemap=sitemap,
         sitemap_url=sitemap_url,
         impersonate=impersonate,
@@ -737,6 +758,7 @@ def api_scrape_start() -> Any:
             "chunk_overlap": chunk_overlap,
             "respect_robots": respect_robots,
             "concurrency": concurrency,
+            "delay": delay,
             "sitemap": sitemap,
             "sitemap_url": sitemap_url,
             "impersonate": impersonate,

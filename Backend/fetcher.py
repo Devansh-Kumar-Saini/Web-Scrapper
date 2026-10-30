@@ -168,6 +168,8 @@ class Fetcher:
     # --- politeness ---
 
     def _wait_for_domain(self, domain: str) -> None:
+        if self.delay <= 0:
+            return
         with self._lock:
             now = time.monotonic()
             next_allowed = max(self._last_request.get(domain, 0.0), now)
@@ -198,9 +200,10 @@ class Fetcher:
         domain = urlparse(url).netloc.lower()
         last_error: Exception | None = None
 
+        request_headers: dict[str, str] = {}
         if self.rotate_user_agent:
             ua = random.choice(USER_AGENTS)
-            self.session.headers["User-Agent"] = ua
+            request_headers["User-Agent"] = ua
 
         for attempt in range(2):
             if self.stop_event and self.stop_event.is_set():
@@ -210,7 +213,10 @@ class Fetcher:
                 raise FetchError("Crawl stopped by request", url)
 
             try:
-                response = self.session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+                get_kwargs: dict[str, Any] = {"timeout": REQUEST_TIMEOUT, "allow_redirects": True}
+                if request_headers:
+                    get_kwargs["headers"] = request_headers
+                response = self.session.get(url, **get_kwargs)
                 response.raise_for_status()
                 content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
                 if content_type and content_type not in HTML_CONTENT_TYPES:

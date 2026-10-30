@@ -384,6 +384,22 @@
                         </div>
                       </div>
                     </div>
+
+                    <!-- Request Delay -->
+                    <div class="input-block">
+                      <div class="input-head">
+                        <label for="delayInput" class="input-label">Request Delay (seconds)</label>
+                      </div>
+                      <div class="pill-input-row">
+                        <input type="number" id="delayInput" class="custom-input" min="0" max="10" step="0.1" value="0.2" required aria-required="true" />
+                        <div class="pill-group" role="group" aria-label="Request delay presets">
+                          <button type="button" class="preset-pill" data-delay="0">0s (Fastest)</button>
+                          <button type="button" class="preset-pill active" data-delay="0.2">0.2s</button>
+                          <button type="button" class="preset-pill" data-delay="0.5">0.5s</button>
+                          <button type="button" class="preset-pill" data-delay="1">1.0s (Polite)</button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

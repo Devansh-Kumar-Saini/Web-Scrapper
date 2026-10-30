@@ -25,6 +25,7 @@ def scrape_url(
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
     impersonate: str | bool | None = None,
     proxy: str | None = None,
+    delay: float = 0.0,
     logger: logging.Logger | None = None,
     fetcher: Fetcher | None = None,
     renderer: PlaywrightRenderer | None = None,
@@ -40,6 +41,7 @@ def scrape_url(
     fetcher = fetcher or Fetcher(
         logger=logger,
         respect_robots=respect_robots,
+        delay=delay,
         impersonate=impersonate,
         proxy=proxy,
     )

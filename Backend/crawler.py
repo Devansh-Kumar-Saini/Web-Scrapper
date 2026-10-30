@@ -13,13 +13,13 @@ from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 try:
-    from .config import SKIPPED_EXTENSIONS
+    from .config import REQUEST_DELAY_SECONDS, SKIPPED_EXTENSIONS
     from .fetcher import Fetcher, FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import URLFilter
     from .renderer import PlaywrightRenderer
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
 except ImportError:  # pragma: no cover - direct script execution
-    from config import SKIPPED_EXTENSIONS
+    from config import REQUEST_DELAY_SECONDS, SKIPPED_EXTENSIONS
     from fetcher import Fetcher, FetchError, NonHtmlContent, RobotsDisallowed
     from filters import URLFilter
     from renderer import PlaywrightRenderer
@@ -68,6 +68,7 @@ class Crawler:
         fetcher: Fetcher | None = None,
         renderer: PlaywrightRenderer | None = None,
         concurrency: int = 5,
+        delay: float = REQUEST_DELAY_SECONDS,
         sitemap: bool = False,
         sitemap_url: str | None = None,
         impersonate: str | bool | None = None,
@@ -81,6 +82,7 @@ class Crawler:
         self.on_page_crawled = on_page_crawled
         self.url_filter = URLFilter(include_patterns, exclude_patterns)
         self.concurrency = max(1, concurrency)
+        self.delay = max(0.0, float(delay))
         self.sitemap = sitemap
         self.sitemap_url = sitemap_url
         self._owns_fetcher = fetcher is None
@@ -88,6 +90,7 @@ class Crawler:
             logger=logger,
             respect_robots=respect_robots,
             stop_event=stop_event,
+            delay=self.delay,
             impersonate=impersonate,
             proxy=proxy,
         )

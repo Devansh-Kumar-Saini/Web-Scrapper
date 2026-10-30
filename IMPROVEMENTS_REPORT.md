@@ -193,6 +193,7 @@ flowchart LR
 
 ### Phase 2: Performance & Engine Upgrades (Weeks 3–4)
 - [x] Convert crawler fetch pipeline to concurrent worker pool (Async / ThreadPool).
+- [x] Add configurable per-domain request delay (`--delay`, UI input with `0s (Fastest)` to `1.0s (Polite)` presets).
 - [x] Add `sitemap.xml` parser for rapid seed population.
 - [x] Integrate `curl_cffi` for lightweight TLS browser impersonation.
 - [x] Support `--stdout` and `--json` pipeable CLI outputs.

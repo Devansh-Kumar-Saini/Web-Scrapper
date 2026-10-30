@@ -124,6 +124,14 @@ class TestFetcherPhase2(unittest.TestCase):
         self.assertIn("domain2.com", fetcher._last_request)
         fetcher.close()
 
+    def test_zero_delay_skips_waiting(self):
+        logger = logging.getLogger("test_zero_delay")
+        fetcher = Fetcher(logger=logger, delay=0.0)
+        fetcher._wait_for_domain("fast.com")
+        # With zero delay, nothing is recorded in _last_request and no sleep happens
+        self.assertNotIn("fast.com", fetcher._last_request)
+        fetcher.close()
+
 
 class TestConcurrentCrawler(unittest.TestCase):
     def test_concurrent_crawl_success(self):
@@ -248,12 +256,17 @@ class TestCLIPipeAndDryRun(unittest.TestCase):
 
     def test_cli_config_file_loading(self):
         with tempfile.NamedTemporaryFile("w+", suffix=".json") as f:
-            f.write(json.dumps({"depth": 3, "format": "jsonl", "concurrency": 8}))
+            f.write(json.dumps({"depth": 3, "format": "jsonl", "concurrency": 8, "delay": 0.05}))
             f.flush()
             args = parse_args(["--config", f.name, "--url", "https://example.com"])
             self.assertEqual(args.depth, 3)
             self.assertEqual(args.format, "jsonl")
             self.assertEqual(args.concurrency, 8)
+            self.assertEqual(args.delay, 0.05)
+
+    def test_cli_delay_argument(self):
+        args = parse_args(["--url", "https://example.com", "--delay", "0.5"])
+        self.assertEqual(args.delay, 0.5)
 
 
 class TestAppPhase2Endpoints(unittest.TestCase):
@@ -266,6 +279,7 @@ class TestAppPhase2Endpoints(unittest.TestCase):
         payload = {
             "urls": "https://example.com",
             "concurrency": 8,
+            "delay": 0.1,
             "sitemap": True,
             "sitemap_url": "https://example.com/sitemap.xml",
             "impersonate": "safari",
@@ -275,6 +289,10 @@ class TestAppPhase2Endpoints(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertEqual(data["config"]["concurrency"], 8)
+        self.assertEqual(data["config"]["delay"], 0.1)
+        self.assertTrue(data["config"]["sitemap"])
+        self.assertEqual(data["config"]["impersonate"], "safari")
+        self.assertEqual(data["config"]["proxy"], "http://127.0.0.1:8080")
         self.assertTrue(data["config"]["sitemap"])
         self.assertEqual(data["config"]["impersonate"], "safari")
         self.assertEqual(data["config"]["proxy"], "http://127.0.0.1:8080")

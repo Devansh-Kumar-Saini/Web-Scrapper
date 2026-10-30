@@ -12,14 +12,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
-    from .config import DEFAULT_MAX_PAGES, MAX_DEPTH
+    from .config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from .crawler import Crawler
     from .extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
     from .filters import parse_patterns, parse_selectors
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:  # pragma: no cover - direct script execution
-    from config import DEFAULT_MAX_PAGES, MAX_DEPTH
+    from config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from crawler import Crawler
     from extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
     from filters import parse_patterns, parse_selectors
@@ -144,6 +144,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5,
         help="Number of concurrent worker threads (default: 5)",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=REQUEST_DELAY_SECONDS,
+        metavar="SECONDS",
+        help=f"Delay between requests to the same domain in seconds (default: {REQUEST_DELAY_SECONDS}; 0 for max speed)",
     )
     parser.add_argument(
         "--sitemap",
@@ -290,6 +297,7 @@ def run(args: argparse.Namespace) -> int:
             exclude_patterns=exclude_patterns,
             respect_robots=args.respect_robots,
             concurrency=args.concurrency,
+            delay=getattr(args, "delay", REQUEST_DELAY_SECONDS),
             sitemap=args.sitemap,
             sitemap_url=args.sitemap_url,
             impersonate=impersonate_val,
@@ -330,6 +338,7 @@ def run(args: argparse.Namespace) -> int:
         exclude_patterns=exclude_patterns,
         respect_robots=args.respect_robots,
         concurrency=args.concurrency,
+        delay=getattr(args, "delay", REQUEST_DELAY_SECONDS),
         sitemap=args.sitemap,
         sitemap_url=args.sitemap_url,
         impersonate=impersonate_val,

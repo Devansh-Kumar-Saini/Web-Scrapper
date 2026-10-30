@@ -57,6 +57,7 @@
   const depthHint = document.getElementById("depthHint");
   const maxPagesInput = document.getElementById("maxPagesInput");
   const concurrencyInput = document.getElementById("concurrencyInput");
+  const delayInput = document.getElementById("delayInput");
   const sameDomainInput = document.getElementById("sameDomainInput");
   const respectRobotsInput = document.getElementById("respectRobotsInput");
   const sitemapInput = document.getElementById("sitemapInput");
@@ -382,17 +383,38 @@
     });
   }
 
+  // Delay pills
+  document.querySelectorAll(".preset-pill[data-delay]").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".preset-pill[data-delay]").forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      if (delayInput) delayInput.value = pill.getAttribute("data-delay");
+      updateSetupSummary();
+    });
+  });
+
+  if (delayInput) {
+    delayInput.addEventListener("input", (e) => {
+      const val = e.target.value;
+      document.querySelectorAll(".preset-pill[data-delay]").forEach((p) => {
+        p.classList.toggle("active", p.getAttribute("data-delay") === val);
+      });
+      updateSetupSummary();
+    });
+  }
+
   function updateSetupSummary() {
     const depth = depthInput.value;
     const maxPages = maxPagesInput.value;
     const concurrency = concurrencyInput ? concurrencyInput.value : 5;
+    const delay = delayInput ? delayInput.value : 0.2;
     const sitemapActive = sitemapInput && sitemapInput.checked;
     const rawUrls = urlInput.value.trim();
     const count = rawUrls ? rawUrls.split(/[\n,]+/).filter((x) => x.trim()).length : 0;
     const domainMsg = sameDomainInput.checked ? "same domain" : "any domain";
     const format = formatInput.value.toUpperCase();
     const sitemapText = sitemapActive ? " · Sitemap" : "";
-    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers${sitemapText} · ${domainMsg} · ${format}`;
+    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers · ${delay}s delay${sitemapText} · ${domainMsg} · ${format}`;
   }
 
   urlInput.addEventListener("input", updateSetupSummary);
@@ -547,6 +569,14 @@
     document.querySelectorAll(".preset-pill[data-pages]").forEach((p) => {
       p.classList.toggle("active", p.getAttribute("data-pages") === "100");
     });
+    if (concurrencyInput) concurrencyInput.value = 5;
+    document.querySelectorAll(".preset-pill[data-concurrency]").forEach((p) => {
+      p.classList.toggle("active", p.getAttribute("data-concurrency") === "5");
+    });
+    if (delayInput) delayInput.value = 0.2;
+    document.querySelectorAll(".preset-pill[data-delay]").forEach((p) => {
+      p.classList.toggle("active", p.getAttribute("data-delay") === "0.2");
+    });
     sameDomainInput.checked = true;
     respectRobotsInput.checked = true;
     if (outputDirInput) outputDirInput.value = "./output";
@@ -596,6 +626,7 @@
     const includePatterns = includePatternInput.value.trim();
     const excludePatterns = excludePatternInput.value.trim();
     const concurrency = concurrencyInput ? (parseInt(concurrencyInput.value, 10) || 5) : 5;
+    const delay = delayInput ? (parseFloat(delayInput.value) >= 0 ? parseFloat(delayInput.value) : 0.2) : 0.2;
     const sitemap = sitemapInput ? sitemapInput.checked : false;
     const impersonate = impersonateInput ? impersonateInput.value : "chrome";
     const proxy = proxyInput ? proxyInput.value.trim() : "";
@@ -622,6 +653,7 @@
           include_patterns: includePatterns,
           exclude_patterns: excludePatterns,
           concurrency,
+          delay,
           sitemap,
           impersonate,
           proxy,
