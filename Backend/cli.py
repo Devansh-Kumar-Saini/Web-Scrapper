@@ -201,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="POST a crawl summary to this URL when the job completes or fails",
     )
     parser.add_argument(
+        "--render-js",
+        action="store_true",
+        help="Force Playwright rendering for every page (otherwise only used as a fallback)",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -316,6 +321,7 @@ def run(args: argparse.Namespace) -> int:
             sitemap_url=args.sitemap_url,
             impersonate=impersonate_val,
             proxy=args.proxy,
+            render_js=getattr(args, "render_js", False),
         )
         discovered_urls = list(urls)
         if args.sitemap or args.sitemap_url:
@@ -358,6 +364,7 @@ def run(args: argparse.Namespace) -> int:
         sitemap_url=args.sitemap_url,
         impersonate=impersonate_val,
         proxy=args.proxy,
+        render_js=getattr(args, "render_js", False),
     )
     crawled = saved = failed = 0
     collected_documents = []

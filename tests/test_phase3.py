@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from Backend.app import JobManager, JobState, app
+from Backend.cli import parse_args, run
 from Backend.exporter import build_results_zip, normalize_format, parse_saved_pages
 from Backend.extractor import PageContent
 from Backend.webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -129,6 +130,88 @@ class TestWebhookAPI(unittest.TestCase):
             json={"urls": ["https://example.com"], "sitemap_url": "not-a-url"},
         )
         self.assertEqual(response.status_code, 400)
+
+
+class TestParityOptions(unittest.TestCase):
+    """Web UI/API and CLI must expose the same crawl options."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def test_start_accepts_sitemap_url_without_seed_urls(self):
+        with patch("Backend.app.job_manager.start_crawl", return_value=(True, "ok")) as mock_start:
+            response = self.client.post(
+                "/api/scrape/start",
+                json={"sitemap_url": "https://example.com/sitemap.xml"},
+            )
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_start.call_args.kwargs
+        self.assertEqual(kwargs["urls"], [])
+        self.assertEqual(kwargs["sitemap_url"], "https://example.com/sitemap.xml")
+
+    def test_start_passes_render_js_and_dry_run(self):
+        with patch("Backend.app.job_manager.start_crawl", return_value=(True, "ok")) as mock_start:
+            response = self.client.post(
+                "/api/scrape/start",
+                json={
+                    "urls": ["https://example.com"],
+                    "render_js": True,
+                    "dry_run": True,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_start.call_args.kwargs
+        self.assertTrue(kwargs["render_js"])
+        self.assertTrue(kwargs["dry_run"])
+        config = response.get_json()["config"]
+        self.assertTrue(config["render_js"])
+        self.assertTrue(config["dry_run"])
+
+    def test_discover_dry_run_respects_filters_and_cap(self):
+        manager = JobManager()
+        crawler = MagicMock()
+        crawler.session = object()
+        crawler.skipped_reasons = []
+        crawler.url_filter.excluded_by.side_effect = (
+            lambda url: "excluded-pattern" if "admin" in url else None
+        )
+
+        sitemap_hits = [
+            "https://example.com/a",
+            "https://example.com/admin",
+            "https://example.com/b",
+            "https://example.com/c",
+        ]
+        with patch("Backend.app.fetch_sitemap_urls", return_value=sitemap_hits):
+            targets = manager._discover_dry_run_urls(
+                crawler,
+                ["https://example.com"],
+                sitemap=False,
+                sitemap_url="https://example.com/sitemap.xml",
+                max_pages=3,
+            )
+
+        self.assertEqual(
+            targets,
+            ["https://example.com", "https://example.com/a", "https://example.com/b"],
+        )
+        self.assertTrue(any("admin" in reason for reason in crawler.skipped_reasons))
+
+    def test_cli_parse_render_js_flag(self):
+        args = parse_args(["--url", "https://example.com", "--render-js"])
+        self.assertTrue(args.render_js)
+
+    @patch("Backend.cli.Crawler")
+    def test_cli_run_passes_render_js_to_crawler(self, mock_crawler_cls):
+        mock_inst = MagicMock()
+        mock_inst.url_filter.excluded_by.return_value = None
+        mock_crawler_cls.return_value = mock_inst
+
+        with patch("sys.stdout", io.StringIO()):
+            ret = run(parse_args(["--url", "https://example.com/dry", "--dry-run", "--render-js"]))
+
+        self.assertEqual(ret, 0)
+        self.assertTrue(mock_crawler_cls.call_args.kwargs["render_js"])
 
 
 class TestExportConversion(unittest.TestCase):

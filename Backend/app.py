@@ -29,6 +29,7 @@ try:
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import parse_patterns, parse_selectors
     from .scraper import scrape_url
+    from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .webhook import build_payload, deliver_webhook, validate_webhook_url
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:
@@ -40,6 +41,7 @@ except ImportError:
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from filters import parse_patterns, parse_selectors
     from scraper import scrape_url
+    from sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from webhook import build_payload, deliver_webhook, validate_webhook_url
     from writer import OUTPUT_FORMATS, OutputWriter
 
@@ -192,7 +194,10 @@ class JobState:
     sitemap_url: str = ""
     impersonate: str = "chrome"
     proxy: str = ""
+    render_js: bool = False
+    dry_run: bool = False
     webhook_url: str = ""
+    discovered_urls: list[str] = field(default_factory=list)
     started_at: float | None = None
     finished_at: float | None = None
     started_at_iso: str = ""
@@ -304,6 +309,49 @@ class JobManager:
         ok, message = deliver_webhook(url, payload)
         self.log("INFO" if ok else "WARN", message)
 
+    def _discover_dry_run_urls(
+        self,
+        crawler: Crawler,
+        urls: list[str],
+        sitemap: bool,
+        sitemap_url: str,
+        max_pages: int,
+    ) -> list[str]:
+        """List crawl targets without downloading page bodies."""
+        discovered = list(urls)
+        try:
+            if sitemap_url:
+                discovered.extend(
+                    fetch_sitemap_urls(sitemap_url, session=crawler.session, max_urls=max_pages)
+                )
+            elif sitemap:
+                for seed in urls:
+                    for candidate in discover_sitemap_urls(seed, session=crawler.session):
+                        discovered.extend(
+                            fetch_sitemap_urls(
+                                candidate,
+                                session=crawler.session,
+                                max_urls=max(1, max_pages - len(discovered)),
+                            )
+                        )
+                        if len(discovered) >= max_pages:
+                            break
+                    if len(discovered) >= max_pages:
+                        break
+        except Exception as exc:
+            self.log("WARN", f"Sitemap discovery failed during dry run: {exc}")
+
+        targets: list[str] = []
+        for candidate in dict.fromkeys(discovered):
+            reason = crawler.url_filter.excluded_by(candidate)
+            if reason:
+                crawler.skipped_reasons.append(f"{reason}: {candidate}")
+                continue
+            targets.append(candidate)
+            if len(targets) >= max_pages:
+                break
+        return targets
+
     def start_crawl(
         self,
         urls: list[str],
@@ -325,6 +373,8 @@ class JobManager:
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
         proxy: str | None = None,
+        render_js: bool = False,
+        dry_run: bool = False,
         webhook_url: str = "",
     ) -> tuple[bool, str]:
         with self.lock:
@@ -353,6 +403,8 @@ class JobManager:
                 sitemap_url=sitemap_url,
                 impersonate=impersonate or "chrome",
                 proxy=proxy or "",
+                render_js=render_js,
+                dry_run=dry_run,
                 webhook_url=webhook_url or "",
                 started_at=time.monotonic(),
                 started_at_iso=datetime.now(timezone.utc).isoformat(),
@@ -380,6 +432,8 @@ class JobManager:
                 sitemap_url,
                 impersonate,
                 proxy,
+                render_js,
+                dry_run,
                 webhook_url or "",
             ),
             daemon=True,
@@ -420,6 +474,8 @@ class JobManager:
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
         proxy: str | None = None,
+        render_js: bool = False,
+        dry_run: bool = False,
         webhook_url: str = "",
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
@@ -473,9 +529,24 @@ class JobManager:
             sitemap_url=sitemap_url,
             impersonate=impersonate,
             proxy=proxy,
+            render_js=render_js,
         )
 
         try:
+            if dry_run:
+                targets = self._discover_dry_run_urls(crawler, urls, sitemap, sitemap_url, max_pages)
+                with self.lock:
+                    self.state.discovered_urls = targets
+                    self.state.pages_skipped = len(crawler.skipped_reasons)
+                    self.state.finished_at = time.monotonic()
+                    self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
+                    self.state.status = "completed"
+                self.log("INFO", f"Dry run complete: {len(targets)} URL(s) would be crawled.")
+                for target in targets:
+                    self.log("INFO", f"  - {target}")
+                self._notify_webhook("crawl.completed", "completed")
+                return
+
             try:
                 for page in crawler.crawl(urls):
                     if self.stop_event.is_set():
@@ -711,7 +782,8 @@ def api_scrape_start() -> Any:
         raw_urls = [raw_urls]
 
     valid_urls, invalid_urls = _parse_urls(raw_urls)
-    if not valid_urls:
+    raw_sitemap_url = str(data.get("sitemap_url") or "").strip()
+    if not valid_urls and not raw_sitemap_url:
         return jsonify({"error": "No valid HTTP/HTTPS URLs provided.", "invalid": invalid_urls}), 400
 
     try:
@@ -760,13 +832,15 @@ def api_scrape_start() -> Any:
     except (ValueError, TypeError):
         return jsonify({"error": "delay must be a number."}), 400
     sitemap = _as_bool(data.get("sitemap"), False)
-    sitemap_url = str(data.get("sitemap_url") or "").strip()
+    sitemap_url = raw_sitemap_url
     if sitemap_url and _valid_url(sitemap_url) is None:
         return jsonify({"error": "sitemap_url must be a valid HTTP/HTTPS URL."}), 400
     impersonate = data.get("impersonate", "chrome")
     if impersonate == "none":
         impersonate = None
     proxy = str(data.get("proxy") or "").strip() or None
+    render_js = _as_bool(data.get("render_js"), False)
+    dry_run = _as_bool(data.get("dry_run"), False)
     try:
         webhook_url = validate_webhook_url(str(data.get("webhook_url") or data.get("webhook") or ""))
     except ValueError as exc:
@@ -792,6 +866,8 @@ def api_scrape_start() -> Any:
         sitemap_url=sitemap_url,
         impersonate=impersonate,
         proxy=proxy,
+        render_js=render_js,
+        dry_run=dry_run,
         webhook_url=webhook_url,
     )
 
@@ -822,6 +898,8 @@ def api_scrape_start() -> Any:
             "sitemap_url": sitemap_url,
             "impersonate": impersonate,
             "proxy": proxy,
+            "render_js": render_js,
+            "dry_run": dry_run,
             "webhook_url": webhook_url,
         },
     })

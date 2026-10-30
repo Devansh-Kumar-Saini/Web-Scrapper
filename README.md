@@ -119,6 +119,7 @@ python main.py
 | `--proxy` | Route requests through an HTTP/SOCKS proxy | None |
 | `--stdout` | Print extracted content to stdout (pipe-friendly) | `False` |
 | `--json` | Print the structured JSON document to stdout | `False` |
+| `--render-js` | Force Playwright rendering for every page | `False` |
 | `--dry-run` | List target URLs without downloading page bodies | `False` |
 | `--webhook` | POST a crawl summary to this URL when the job finishes | None |
 | `--config` | Load defaults from `.scraperrc` / `scraper.json` | None |

@@ -73,6 +73,7 @@ class Crawler:
         sitemap_url: str | None = None,
         impersonate: str | bool | None = None,
         proxy: str | None = None,
+        render_js: bool = False,
     ) -> None:
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -85,6 +86,7 @@ class Crawler:
         self.delay = max(0.0, float(delay))
         self.sitemap = sitemap
         self.sitemap_url = sitemap_url
+        self.render_js = bool(render_js)
         self._owns_fetcher = fetcher is None
         self.fetcher = fetcher or Fetcher(
             logger=logger,
@@ -175,7 +177,7 @@ class Crawler:
             final_url = normalize_url(result.final_url)
             html = result.html
             soup = BeautifulSoup(html, "lxml")
-            if len(soup.get_text(" ", strip=True)) < 20:
+            if self.render_js or len(soup.get_text(" ", strip=True)) < 20:
                 with self._render_lock:
                     rendered_html = self._render(final_url)
                 if rendered_html:
@@ -252,7 +254,7 @@ class Crawler:
             final_url = normalize_url(result.final_url)
             html = result.html
             soup = BeautifulSoup(html, "lxml")
-            if len(soup.get_text(" ", strip=True)) < 20:
+            if self.render_js or len(soup.get_text(" ", strip=True)) < 20:
                 with self._render_lock:
                     rendered_html = self._render(final_url)
                 if rendered_html:

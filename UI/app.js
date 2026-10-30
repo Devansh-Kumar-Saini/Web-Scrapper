@@ -67,6 +67,8 @@
   const respectRobotsInput = document.getElementById("respectRobotsInput");
   const sitemapInput = document.getElementById("sitemapInput");
   const sitemapUrlInput = document.getElementById("sitemapUrlInput");
+  const renderJsInput = document.getElementById("renderJsInput");
+  const dryRunInput = document.getElementById("dryRunInput");
   const impersonateInput = document.getElementById("impersonateInput");
   const proxyInput = document.getElementById("proxyInput");
   const webhookUrlInput = document.getElementById("webhookUrlInput");
@@ -428,13 +430,20 @@
     const count = rawUrls ? rawUrls.split(/[\n,]+/).filter((x) => x.trim()).length : 0;
     const domainMsg = sameDomainInput.checked ? "same domain" : "any domain";
     const format = formatInput.value.toUpperCase();
-    const sitemapText = sitemapActive ? " · Sitemap" : "";
-    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers · ${delay}s delay${sitemapText} · ${domainMsg} · ${format}`;
+    const flags = [];
+    if (sitemapActive || (sitemapUrlInput && sitemapUrlInput.value.trim())) flags.push("Sitemap");
+    if (renderJsInput && renderJsInput.checked) flags.push("JS render");
+    if (dryRunInput && dryRunInput.checked) flags.push("Dry run");
+    const flagText = flags.length ? ` · ${flags.join(" · ")}` : "";
+    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers · ${delay}s delay${flagText} · ${domainMsg} · ${format}`;
   }
 
   urlInput.addEventListener("input", updateSetupSummary);
   sameDomainInput.addEventListener("change", updateSetupSummary);
   if (sitemapInput) sitemapInput.addEventListener("change", updateSetupSummary);
+  if (sitemapUrlInput) sitemapUrlInput.addEventListener("input", updateSetupSummary);
+  if (renderJsInput) renderJsInput.addEventListener("change", updateSetupSummary);
+  if (dryRunInput) dryRunInput.addEventListener("change", updateSetupSummary);
 
   // Format Selection Cards
   formatCards.forEach((card) => {
@@ -596,12 +605,14 @@
     respectRobotsInput.checked = true;
     if (sitemapInput) sitemapInput.checked = false;
     if (sitemapUrlInput) sitemapUrlInput.value = "";
+    if (renderJsInput) renderJsInput.checked = false;
+    if (dryRunInput) dryRunInput.checked = false;
     if (outputDirInput) outputDirInput.value = "./output";
     if (webhookUrlInput) webhookUrlInput.value = "";
     selectorInput.value = "";
     excludeSelectorInput.value = "";
     chunkSizeInput.value = 0;
-    chunkOverlapInput.value = 200;
+    chunkOverlapInput.value = 400;
     includePatternInput.value = "";
     excludePatternInput.value = "";
     updateSetupSummary();
@@ -624,8 +635,10 @@
     if (state.isRunning) return;
 
     const urlsRaw = urlInput.value.trim();
-    if (!urlsRaw) {
-      showToast("Please enter at least one target URL in Crawl Setup.", "warn");
+    const sitemap = sitemapInput ? sitemapInput.checked : false;
+    const sitemapUrl = sitemapUrlInput ? sitemapUrlInput.value.trim() : "";
+    if (!urlsRaw && !sitemapUrl) {
+      showToast("Enter a target URL or a custom sitemap URL in Crawl Setup.", "warn");
       switchView("viewCrawlSetup");
       urlInput.focus();
       return;
@@ -640,13 +653,13 @@
     const targetSelector = selectorInput.value.trim();
     const excludeSelectors = excludeSelectorInput.value.trim();
     const chunkSize = parseInt(chunkSizeInput.value, 10) || 0;
-    const chunkOverlap = parseInt(chunkOverlapInput.value, 10) || 200;
+    const chunkOverlap = parseInt(chunkOverlapInput.value, 10) || 400;
     const includePatterns = includePatternInput.value.trim();
     const excludePatterns = excludePatternInput.value.trim();
     const concurrency = concurrencyInput ? (parseInt(concurrencyInput.value, 10) || 5) : 5;
     const delay = delayInput ? (parseFloat(delayInput.value) >= 0 ? parseFloat(delayInput.value) : 0.2) : 0.2;
-    const sitemap = sitemapInput ? sitemapInput.checked : false;
-    const sitemapUrl = sitemapUrlInput ? sitemapUrlInput.value.trim() : "";
+    const renderJs = renderJsInput ? renderJsInput.checked : false;
+    const dryRun = dryRunInput ? dryRunInput.checked : false;
     const impersonate = impersonateInput ? impersonateInput.value : "chrome";
     const proxy = proxyInput ? proxyInput.value.trim() : "";
     const webhookUrl = webhookUrlInput ? webhookUrlInput.value.trim() : "";
@@ -676,6 +689,8 @@
           delay,
           sitemap,
           sitemap_url: sitemapUrl,
+          render_js: renderJs,
+          dry_run: dryRun,
           impersonate,
           proxy,
           webhook_url: webhookUrl,
@@ -1046,6 +1061,9 @@
     }
 
     const startTime = performance.now();
+    const inspectorChunkSize = chunkSizeInput ? parseInt(chunkSizeInput.value, 10) : 0;
+    const inspectorChunkOverlap = chunkOverlapInput ? parseInt(chunkOverlapInput.value, 10) : 400;
+    const inspectorDelay = delayInput ? parseFloat(delayInput.value) : 0;
     try {
       const resp = await fetch("/api/scrape", {
         method: "POST",
@@ -1059,6 +1077,10 @@
           render_js: inspectorJsToggle.checked,
           target_selector: inspectorSelectorInput.value.trim() || undefined,
           exclude_selectors: inspectorExcludeSelectorInput.value.trim() || undefined,
+          respect_robots: respectRobotsInput ? respectRobotsInput.checked : true,
+          chunk_size: Number.isFinite(inspectorChunkSize) ? inspectorChunkSize : 0,
+          chunk_overlap: Number.isFinite(inspectorChunkOverlap) ? inspectorChunkOverlap : 400,
+          delay: Number.isFinite(inspectorDelay) ? inspectorDelay : 0,
           impersonate: impersonateInput ? impersonateInput.value : undefined,
           proxy: proxyInput ? proxyInput.value.trim() || undefined : undefined,
         }),
