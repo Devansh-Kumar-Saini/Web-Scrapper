@@ -110,6 +110,7 @@
   const catalogSearchInput = document.getElementById("catalogSearchInput");
   const catalogTotalCount = document.getElementById("catalogTotalCount");
   const refreshCatalogBtn = document.getElementById("refreshCatalogBtn");
+  const downloadZipCatalogBtn = document.getElementById("downloadZipCatalogBtn");
 
   // Output Storage
   const outputFolderLabel = document.getElementById("outputFolderLabel");
@@ -762,6 +763,10 @@
       }
     });
 
+    state.eventSource.addEventListener("reset", () => {
+      clearAllClientData();
+    });
+
     state.eventSource.onerror = () => {
       // Browser EventSource automatically handles reconnection
     };
@@ -787,18 +792,22 @@
   }
 
   function applyStats(snap) {
-    monitorCrawledVal.textContent = snap.pages_crawled ?? 0;
-    monitorSavedVal.textContent = snap.pages_saved ?? 0;
-    monitorSkippedVal.textContent = snap.pages_skipped ?? 0;
-    if (snap.elapsed_seconds) {
-      monitorElapsedVal.textContent = `${snap.elapsed_seconds}s`;
+    if (monitorCrawledVal) monitorCrawledVal.textContent = snap.pages_crawled ?? 0;
+    if (monitorSavedVal) monitorSavedVal.textContent = snap.pages_saved ?? 0;
+    if (monitorSkippedVal) monitorSkippedVal.textContent = snap.pages_skipped ?? 0;
+    if (monitorElapsedVal) {
+      const elapsed = snap.elapsed_seconds ?? 0;
+      monitorElapsedVal.textContent = `${elapsed}s`;
     }
 
     if (snap.current_url) {
       const depthStr = `Depth ${snap.current_depth ?? 0}`;
-      monitorDepthTag.textContent = depthStr;
-      monitorUrlText.textContent = snap.current_url;
-      topbarTickerText.textContent = `[${depthStr}] ${snap.current_url}`;
+      if (monitorDepthTag) monitorDepthTag.textContent = depthStr;
+      if (monitorUrlText) monitorUrlText.textContent = snap.current_url;
+      if (topbarTickerText) topbarTickerText.textContent = `[${depthStr}] ${snap.current_url}`;
+    } else if (!state.isRunning) {
+      if (monitorDepthTag) monitorDepthTag.textContent = "Depth 0";
+      if (monitorUrlText) monitorUrlText.textContent = "Engine idle. Ready to crawl.";
     }
   }
 
@@ -1118,11 +1127,161 @@
     showToast("Storage files list refreshed", "info");
   });
 
-  downloadZipBtn.addEventListener("click", () => {
+  function clearAllClientData() {
+    // 1. Reset client application state
+    state.savedPages = [];
+    state.allLogs = [];
+    state.isRunning = false;
+    if (state.elapsedTimer) {
+      clearInterval(state.elapsedTimer);
+      state.elapsedTimer = null;
+    }
+    state.crawlStartTime = null;
+
+    // 2. Clear Live Monitor Telemetry Metrics
+    if (monitorCrawledVal) monitorCrawledVal.textContent = "0";
+    if (monitorSavedVal) monitorSavedVal.textContent = "0";
+    if (monitorSkippedVal) monitorSkippedVal.textContent = "0";
+    if (monitorElapsedVal) monitorElapsedVal.textContent = "0.0s";
+
+    // 3. Clear Active URL Ticker Box
+    if (monitorDepthTag) monitorDepthTag.textContent = "Depth 0";
+    if (monitorUrlText) monitorUrlText.textContent = "Engine idle. Ready to crawl.";
+
+    // 4. Clear Terminal Console & Badges
+    if (terminalConsole) {
+      terminalConsole.innerHTML = "";
+      const initRow = document.createElement("div");
+      initRow.className = "log-row log-system";
+      initRow.innerHTML = `
+        <span class="log-ts">${new Date().toTimeString().slice(0, 8)}</span>
+        <span class="log-tag">SYSTEM</span>
+        <span class="log-content">Crawler engine initialized and ready.</span>
+      `;
+      terminalConsole.appendChild(initRow);
+    }
+    if (terminalCounter) terminalCounter.textContent = "0 logs";
+    if (navLogBadge) navLogBadge.textContent = "0";
+
+    // 5. Clear Saved Pages Catalog & Badge
+    if (catalogSearchInput) catalogSearchInput.value = "";
+    renderCatalogTable();
+    if (catalogTotalCount) catalogTotalCount.textContent = "0";
+    if (navPageBadge) navPageBadge.textContent = "0";
+
+    // 6. Clear Output Storage Explorer
+    if (outputTotalFilesVal) outputTotalFilesVal.textContent = "0";
+    if (outputTotalSizeVal) outputTotalSizeVal.textContent = "0.0 KB";
+    if (outputManifestVal) outputManifestVal.textContent = "None";
+    if (outputFileList) {
+      outputFileList.innerHTML = '<p class="empty-hint">No files in directory yet.</p>';
+    }
+
+    // 7. Reset Topbar & Sidebar indicators
+    if (statusPill) statusPill.className = "status-pill status-idle";
+    if (statusText) statusText.textContent = "Idle";
+    if (topbarTicker) topbarTicker.style.display = "none";
+    if (topbarTickerText) topbarTickerText.textContent = "Starting crawl...";
+    if (sidebarPulse) sidebarPulse.className = "pulse-dot";
+    if (sidebarStatusText) sidebarStatusText.textContent = "Engine Ready";
+
+    // 8. Reset Action Buttons
+    if (globalStartBtn) globalStartBtn.disabled = false;
+    if (submitCrawlBtn) submitCrawlBtn.disabled = false;
+    if (globalStopBtn) globalStopBtn.disabled = true;
+
+    // 9. Close Preview Drawer if open
+    if (previewDrawer && previewDrawer.classList.contains("open")) {
+      closePreviewDrawer();
+    }
+  }
+
+  async function downloadResultsZip() {
+    if (state.isRunning) {
+      showToast("A crawl job is currently running. Please stop it or wait for completion before downloading.", "warn");
+      return;
+    }
+
     const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
-    window.location.href = `/api/results/download?output_dir=${encodeURIComponent(outDir)}`;
+    const totalFiles = parseInt(outputTotalFilesVal ? outputTotalFilesVal.textContent : "0", 10) || 0;
+    if (state.savedPages.length === 0 && totalFiles === 0) {
+      showToast("No files found in output directory to download.", "warn");
+      return;
+    }
+
+    const btns = [downloadZipBtn, downloadZipCatalogBtn].filter(Boolean);
+    const origHtmls = btns.map((b) => b.innerHTML);
+    btns.forEach((b) => {
+      b.disabled = true;
+      b.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        <span>Downloading...</span>
+      `;
+    });
     showToast("Generating ZIP archive download...", "info");
-  });
+
+    try {
+      const resp = await fetch(`/api/results/download?output_dir=${encodeURIComponent(outDir)}`);
+      if (!resp.ok) {
+        let errorMsg = `HTTP ${resp.status}`;
+        try {
+          const errData = await resp.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch (_) {}
+        throw new Error(errorMsg);
+      }
+
+      let filename = `scraped_pages_${Date.now()}.zip`;
+      const disposition = resp.headers.get("content-disposition") || resp.headers.get("Content-Disposition");
+      if (disposition && disposition.includes("filename=")) {
+        const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match && match[1]) {
+          filename = match[1].replace(/['"]/g, "").trim();
+        }
+      }
+
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = blobUrl;
+      downloadLink.download = filename;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+
+      // Once the user downloads the zip file, clear all the Live Monitor and Saved Pages, etc
+      try {
+        await fetch("/api/results/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ output_dir: outDir }),
+        });
+      } catch (clearErr) {
+        console.warn("Failed to clear server results:", clearErr);
+      }
+
+      clearAllClientData();
+      showToast("ZIP downloaded. Live Monitor, Saved Pages, and storage have been cleared.", "success");
+    } catch (err) {
+      showToast(`Download failed: ${err.message}`, "error");
+    } finally {
+      btns.forEach((b, i) => {
+        b.disabled = false;
+        b.innerHTML = origHtmls[i];
+      });
+    }
+  }
+
+  if (downloadZipBtn) {
+    downloadZipBtn.addEventListener("click", downloadResultsZip);
+  }
+  if (downloadZipCatalogBtn) {
+    downloadZipCatalogBtn.addEventListener("click", downloadResultsZip);
+  }
 
   clearOutputBtn.addEventListener("click", async () => {
     const confirmed = confirm("Are you sure you want to delete all scraped files in the output directory?");
@@ -1136,9 +1295,7 @@
         body: JSON.stringify({ output_dir: outDir }),
       });
       const data = await resp.json();
-      state.savedPages = [];
-      renderCatalogTable();
-      fetchOutputDirectory();
+      clearAllClientData();
       showToast(`Purged output folder (${data.deleted_files} files deleted)`, "info");
     } catch (err) {
       showToast(`Failed to clear folder: ${err.message}`, "error");

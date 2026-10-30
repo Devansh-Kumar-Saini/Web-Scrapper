@@ -250,6 +250,16 @@ class JobManager:
             data["elapsed_seconds"] = round(elapsed, 2)
             return data
 
+    def reset(self) -> None:
+        with self.lock:
+            if self.state.status == "running":
+                self.stop_event.set()
+            self.state = JobState()
+        snap = self.get_snapshot()
+        self.broadcast("reset", snap)
+        self.broadcast("status", snap)
+        self.broadcast("stats", snap)
+
     def start_crawl(
         self,
         urls: list[str],
@@ -694,6 +704,12 @@ def api_scrape_status() -> Any:
     return jsonify(job_manager.get_snapshot())
 
 
+@app.route("/api/scrape/reset", methods=["POST"])
+def api_scrape_reset() -> Any:
+    job_manager.reset()
+    return jsonify({"status": "reset", "snapshot": job_manager.get_snapshot()})
+
+
 @app.route("/api/scrape/events", methods=["GET"])
 def api_scrape_events() -> Response:
     q = job_manager.subscribe()
@@ -805,6 +821,7 @@ def api_results_download() -> Any:
     if not out_path.exists() or not out_path.is_dir():
         return jsonify({"error": "Output directory does not exist."}), 404
 
+    file_count = 0
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for root_dir, _, files in os.walk(out_path):
@@ -812,6 +829,10 @@ def api_results_download() -> Any:
                 file_full = Path(root_dir) / file
                 rel_path = file_full.relative_to(out_path)
                 zf.write(file_full, arcname=str(rel_path))
+                file_count += 1
+
+    if file_count == 0:
+        return jsonify({"error": "No files found in output directory to download."}), 404
 
     zip_buffer.seek(0)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -828,18 +849,22 @@ def api_results_clear() -> Any:
     data = request.get_json(silent=True) or {}
     out_path = _resolve_output_dir(str(data.get("output_dir", "./output")))
 
-    if not out_path.exists() or not out_path.is_dir():
-        return jsonify({"status": "cleared", "deleted_files": 0})
-
     deleted = 0
-    for item in out_path.glob("*"):
-        if item.is_file():
-            try:
-                item.unlink()
-                deleted += 1
-            except OSError:
-                pass
+    if out_path.exists() and out_path.is_dir():
+        for item in sorted(out_path.glob("**/*"), key=lambda p: len(str(p)), reverse=True):
+            if item.is_file():
+                try:
+                    item.unlink()
+                    deleted += 1
+                except OSError:
+                    pass
+            elif item.is_dir():
+                try:
+                    item.rmdir()
+                except OSError:
+                    pass
 
+    job_manager.reset()
     return jsonify({"status": "cleared", "deleted_files": deleted})
 
 

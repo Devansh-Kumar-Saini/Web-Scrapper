@@ -173,6 +173,41 @@ class TestOutputDirectory(unittest.TestCase):
             self.assertEqual(clear_resp.status_code, 200)
             self.assertGreaterEqual(clear_resp.get_json()["deleted_files"], 2)
 
+    def test_api_results_download_empty_dir(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            resp = self.client.get(f"/api/results/download?output_dir={tmp_dir}")
+            self.assertEqual(resp.status_code, 404)
+            data = resp.get_json()
+            self.assertIn("No files found", data.get("error", ""))
+
+    def test_api_results_clear_resets_job_manager(self):
+        from Backend.app import job_manager
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            job_manager.state.pages_crawled = 5
+            job_manager.state.pages_saved = 3
+            job_manager.state.status = "completed"
+            job_manager.state.logs = [{"level": "INFO", "message": "done"}]
+
+            resp = self.client.post("/api/results/clear", json={"output_dir": tmp_dir})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(job_manager.state.pages_crawled, 0)
+            self.assertEqual(job_manager.state.pages_saved, 0)
+            self.assertEqual(job_manager.state.status, "idle")
+            self.assertEqual(job_manager.state.logs, [])
+
+    def test_api_scrape_reset(self):
+        from Backend.app import job_manager
+        job_manager.state.pages_crawled = 42
+        job_manager.state.status = "completed"
+
+        resp = self.client.post("/api/scrape/reset")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["status"], "reset")
+        self.assertEqual(data["snapshot"]["pages_crawled"], 0)
+        self.assertEqual(job_manager.state.pages_crawled, 0)
+        self.assertEqual(job_manager.state.status, "idle")
+
 
 if __name__ == "__main__":
     unittest.main()
