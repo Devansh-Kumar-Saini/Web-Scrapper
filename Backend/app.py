@@ -181,6 +181,11 @@ class JobState:
     chunk_size: int = 0
     chunk_overlap: int = 400
     respect_robots: bool = True
+    concurrency: int = 5
+    sitemap: bool = False
+    sitemap_url: str = ""
+    impersonate: str = "chrome"
+    proxy: str = ""
     started_at: float | None = None
     finished_at: float | None = None
     elapsed_seconds: float = 0.0
@@ -275,6 +280,11 @@ class JobManager:
         chunk_size: int = 0,
         chunk_overlap: int = 400,
         respect_robots: bool = True,
+        concurrency: int = 5,
+        sitemap: bool = False,
+        sitemap_url: str = "",
+        impersonate: str | None = "chrome",
+        proxy: str | None = None,
     ) -> tuple[bool, str]:
         with self.lock:
             if self.state.status in {"running", "stopping"}:
@@ -296,6 +306,11 @@ class JobManager:
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 respect_robots=respect_robots,
+                concurrency=concurrency,
+                sitemap=sitemap,
+                sitemap_url=sitemap_url,
+                impersonate=impersonate or "chrome",
+                proxy=proxy or "",
                 started_at=time.monotonic(),
             )
 
@@ -315,6 +330,11 @@ class JobManager:
                 chunk_size,
                 chunk_overlap,
                 respect_robots,
+                concurrency,
+                sitemap,
+                sitemap_url,
+                impersonate,
+                proxy,
             ),
             daemon=True,
         )
@@ -348,6 +368,11 @@ class JobManager:
         chunk_size: int,
         chunk_overlap: int,
         respect_robots: bool,
+        concurrency: int = 5,
+        sitemap: bool = False,
+        sitemap_url: str = "",
+        impersonate: str | None = "chrome",
+        proxy: str | None = None,
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -391,6 +416,11 @@ class JobManager:
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
             respect_robots=respect_robots,
+            concurrency=concurrency,
+            sitemap=sitemap,
+            sitemap_url=sitemap_url,
+            impersonate=impersonate,
+            proxy=proxy,
         )
 
         try:
@@ -555,6 +585,11 @@ def api_scrape() -> Any:
     if chunk_size < 0 or chunk_overlap < 0:
         return jsonify({"error": "chunk_size and chunk_overlap cannot be negative."}), 400
 
+    impersonate = data.get("impersonate", "chrome")
+    if impersonate == "none":
+        impersonate = None
+    proxy = str(data.get("proxy") or "").strip() or None
+
     try:
         document = scrape_url(
             url,
@@ -564,6 +599,8 @@ def api_scrape() -> Any:
             respect_robots=_as_bool(data.get("respect_robots"), True),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            impersonate=impersonate,
+            proxy=proxy,
             logger=app.logger,
         )
     except RobotsDisallowed as exc:
@@ -649,6 +686,13 @@ def api_scrape_start() -> Any:
         return jsonify({"error": "chunk_overlap cannot be negative."}), 400
 
     respect_robots = _as_bool(data.get("respect_robots"), True)
+    concurrency = _as_int(data.get("concurrency", 5), 5)
+    sitemap = _as_bool(data.get("sitemap"), False)
+    sitemap_url = str(data.get("sitemap_url") or "").strip()
+    impersonate = data.get("impersonate", "chrome")
+    if impersonate == "none":
+        impersonate = None
+    proxy = str(data.get("proxy") or "").strip() or None
 
     started, msg = job_manager.start_crawl(
         urls=valid_urls,
@@ -664,6 +708,11 @@ def api_scrape_start() -> Any:
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         respect_robots=respect_robots,
+        concurrency=concurrency,
+        sitemap=sitemap,
+        sitemap_url=sitemap_url,
+        impersonate=impersonate,
+        proxy=proxy,
     )
 
     if not started:
@@ -687,6 +736,11 @@ def api_scrape_start() -> Any:
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "respect_robots": respect_robots,
+            "concurrency": concurrency,
+            "sitemap": sitemap,
+            "sitemap_url": sitemap_url,
+            "impersonate": impersonate,
+            "proxy": proxy,
         },
     })
 

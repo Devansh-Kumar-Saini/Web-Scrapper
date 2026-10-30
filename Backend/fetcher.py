@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
+
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CURL_CFFI = True
+except ImportError:  # pragma: no cover
+    cffi_requests = None
+    HAS_CURL_CFFI = False
 
 try:
     from .config import (
@@ -27,6 +36,27 @@ except ImportError:  # pragma: no cover - direct script execution
         RETRY_DELAY_SECONDS,
         USER_AGENT,
     )
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+]
+
+DEFAULT_BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-CH-UA": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 class FetchError(Exception):
@@ -63,23 +93,43 @@ class Fetcher:
         logger: logging.Logger | None = None,
         respect_robots: bool = True,
         stop_event: threading.Event | None = None,
-        session: requests.Session | None = None,
+        session: Any = None,
         user_agent: str = USER_AGENT,
         delay: float = REQUEST_DELAY_SECONDS,
+        impersonate: str | bool | None = None,
+        proxy: str | None = None,
+        rotate_user_agent: bool = False,
     ) -> None:
         self.logger = logger or logging.getLogger(__name__)
         self.respect_robots = respect_robots
         self.stop_event = stop_event
         self.user_agent = user_agent
         self.delay = delay
-        self.session = session or requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": self.user_agent,
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-        )
+        self.impersonate = impersonate
+        self.proxy = proxy
+        self.rotate_user_agent = rotate_user_agent
+
+        if session is not None:
+            self.session = session
+            self.is_curl_cffi = False
+        elif impersonate and HAS_CURL_CFFI:
+            target_imp = "chrome" if impersonate is True else str(impersonate)
+            try:
+                self.session = cffi_requests.Session(impersonate=target_imp)
+                self.is_curl_cffi = True
+            except Exception as exc:
+                self.logger.warning("Failed to initialize curl_cffi with impersonate='%s': %s", target_imp, exc)
+                self.session = requests.Session()
+                self.is_curl_cffi = False
+        else:
+            self.session = requests.Session()
+            self.is_curl_cffi = False
+
+        if self.proxy:
+            self.session.proxies = {"http": self.proxy, "https": self.proxy}
+
+        self.session.headers.update(DEFAULT_BROWSER_HEADERS)
+        self.session.headers["User-Agent"] = self.user_agent
         self._robots: dict[str, RobotFileParser] = {}
         self._last_request: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -101,7 +151,7 @@ class Fetcher:
                 parser.parse([])
             else:
                 parser.parse(response.text.splitlines())
-        except requests.RequestException as exc:
+        except Exception as exc:
             # An unreachable robots.txt means "no restrictions".
             self.logger.warning("Could not read robots.txt for %s: %s", origin, exc)
             parser.parse([])
@@ -119,19 +169,16 @@ class Fetcher:
 
     def _wait_for_domain(self, domain: str) -> None:
         with self._lock:
-            elapsed = time.monotonic() - self._last_request.get(domain, 0)
-            remaining = self.delay - elapsed
-            if remaining <= 0:
-                self._last_request[domain] = time.monotonic()
-                return
+            now = time.monotonic()
+            next_allowed = max(self._last_request.get(domain, 0.0), now)
+            self._last_request[domain] = next_allowed + self.delay
+            wait_time = next_allowed - now
 
-        if self.stop_event:
-            self.stop_event.wait(timeout=remaining)
-        else:
-            time.sleep(remaining)
-
-        with self._lock:
-            self._last_request[domain] = time.monotonic()
+        if wait_time > 0:
+            if self.stop_event:
+                self.stop_event.wait(timeout=wait_time)
+            else:
+                time.sleep(wait_time)
 
     def _sleep(self, seconds: float) -> None:
         if self.stop_event:
@@ -149,7 +196,11 @@ class Fetcher:
             raise RobotsDisallowed("Disallowed by robots.txt", url)
 
         domain = urlparse(url).netloc.lower()
-        last_error: requests.RequestException | None = None
+        last_error: Exception | None = None
+
+        if self.rotate_user_agent:
+            ua = random.choice(USER_AGENTS)
+            self.session.headers["User-Agent"] = ua
 
         for attempt in range(2):
             if self.stop_event and self.stop_event.is_set():
@@ -174,7 +225,7 @@ class Fetcher:
                 )
             except NonHtmlContent:
                 raise
-            except requests.RequestException as exc:
+            except Exception as exc:
                 last_error = exc
                 if self.stop_event and self.stop_event.is_set():
                     raise FetchError("Crawl stopped by request", url) from exc

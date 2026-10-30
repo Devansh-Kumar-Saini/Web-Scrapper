@@ -56,8 +56,12 @@
   const depthDisplay = document.getElementById("depthDisplay");
   const depthHint = document.getElementById("depthHint");
   const maxPagesInput = document.getElementById("maxPagesInput");
+  const concurrencyInput = document.getElementById("concurrencyInput");
   const sameDomainInput = document.getElementById("sameDomainInput");
   const respectRobotsInput = document.getElementById("respectRobotsInput");
+  const sitemapInput = document.getElementById("sitemapInput");
+  const impersonateInput = document.getElementById("impersonateInput");
+  const proxyInput = document.getElementById("proxyInput");
   const outputDirInput = document.getElementById("outputDirInput");
   const browseDirBtn = document.getElementById("browseDirBtn");
   const submitCrawlBtn = document.getElementById("submitCrawlBtn");
@@ -358,18 +362,42 @@
     updateSetupSummary();
   });
 
+  // Concurrency pills
+  document.querySelectorAll(".preset-pill[data-concurrency]").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".preset-pill[data-concurrency]").forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      if (concurrencyInput) concurrencyInput.value = pill.getAttribute("data-concurrency");
+      updateSetupSummary();
+    });
+  });
+
+  if (concurrencyInput) {
+    concurrencyInput.addEventListener("input", (e) => {
+      const val = e.target.value;
+      document.querySelectorAll(".preset-pill[data-concurrency]").forEach((p) => {
+        p.classList.toggle("active", p.getAttribute("data-concurrency") === val);
+      });
+      updateSetupSummary();
+    });
+  }
+
   function updateSetupSummary() {
     const depth = depthInput.value;
     const maxPages = maxPagesInput.value;
+    const concurrency = concurrencyInput ? concurrencyInput.value : 5;
+    const sitemapActive = sitemapInput && sitemapInput.checked;
     const rawUrls = urlInput.value.trim();
     const count = rawUrls ? rawUrls.split(/[\n,]+/).filter((x) => x.trim()).length : 0;
     const domainMsg = sameDomainInput.checked ? "same domain" : "any domain";
     const format = formatInput.value.toUpperCase();
-    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${domainMsg} · ${format}`;
+    const sitemapText = sitemapActive ? " · Sitemap" : "";
+    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers${sitemapText} · ${domainMsg} · ${format}`;
   }
 
   urlInput.addEventListener("input", updateSetupSummary);
   sameDomainInput.addEventListener("change", updateSetupSummary);
+  if (sitemapInput) sitemapInput.addEventListener("change", updateSetupSummary);
 
   // Format Selection Cards
   formatCards.forEach((card) => {
@@ -567,6 +595,10 @@
     const chunkOverlap = parseInt(chunkOverlapInput.value, 10) || 200;
     const includePatterns = includePatternInput.value.trim();
     const excludePatterns = excludePatternInput.value.trim();
+    const concurrency = concurrencyInput ? (parseInt(concurrencyInput.value, 10) || 5) : 5;
+    const sitemap = sitemapInput ? sitemapInput.checked : false;
+    const impersonate = impersonateInput ? impersonateInput.value : "chrome";
+    const proxy = proxyInput ? proxyInput.value.trim() : "";
 
     // Disable start buttons, show loading state
     setLaunchState(true);
@@ -589,6 +621,10 @@
           chunk_overlap: chunkOverlap,
           include_patterns: includePatterns,
           exclude_patterns: excludePatterns,
+          concurrency,
+          sitemap,
+          impersonate,
+          proxy,
         }),
       });
 
@@ -913,6 +949,8 @@
           render_js: inspectorJsToggle.checked,
           target_selector: selectorInput.value.trim() || undefined,
           exclude_selectors: excludeSelectorInput.value.trim() || undefined,
+          impersonate: impersonateInput ? impersonateInput.value : undefined,
+          proxy: proxyInput ? proxyInput.value.trim() || undefined : undefined,
         }),
       });
 

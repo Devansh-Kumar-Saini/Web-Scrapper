@@ -33,6 +33,7 @@ dependencies = [
   "lxml>=4.9.0",
   "markdownify>=0.13.1",
   "Flask>=3.0.0",
+  "curl_cffi>=0.7.0",
 ]
 
 [project.optional-dependencies]

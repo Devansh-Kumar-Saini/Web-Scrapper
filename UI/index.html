@@ -368,6 +368,22 @@
                         </div>
                       </div>
                     </div>
+
+                    <!-- Concurrent Workers -->
+                    <div class="input-block">
+                      <div class="input-head">
+                        <label for="concurrencyInput" class="input-label">Concurrent Workers</label>
+                      </div>
+                      <div class="pill-input-row">
+                        <input type="number" id="concurrencyInput" class="custom-input" min="1" max="20" value="5" required aria-required="true" />
+                        <div class="pill-group" role="group" aria-label="Worker concurrency presets">
+                          <button type="button" class="preset-pill" data-concurrency="1">1</button>
+                          <button type="button" class="preset-pill" data-concurrency="3">3</button>
+                          <button type="button" class="preset-pill active" data-concurrency="5">5</button>
+                          <button type="button" class="preset-pill" data-concurrency="10">10</button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -399,6 +415,44 @@
                         <span class="toggle-desc">Follow robots.txt rules.</span>
                       </div>
                     </label>
+
+                    <label class="toggle-card">
+                      <input type="checkbox" id="sitemapInput" role="switch" aria-checked="false" />
+                      <div class="toggle-track">
+                        <span class="toggle-thumb"></span>
+                      </div>
+                      <div class="toggle-info">
+                        <span class="toggle-title">Crawl from sitemap.xml</span>
+                        <span class="toggle-desc">Auto-discover URLs from site XML sitemap.</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Network & Anti-Bot Resilience -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Network &amp; Anti-Bot Resilience</h2>
+                      <span class="card-hint">Browser TLS impersonation (curl_cffi) &amp; proxy routing</span>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="form-layout-grid">
+                      <div class="input-block">
+                        <label for="impersonateInput" class="input-label">TLS Fingerprint Impersonation</label>
+                        <select id="impersonateInput" class="custom-input">
+                          <option value="chrome" selected>Chrome (Default TLS Fingerprint)</option>
+                          <option value="safari">Safari (macOS TLS)</option>
+                          <option value="firefox">Firefox TLS</option>
+                          <option value="none">Disabled (Standard Python requests)</option>
+                        </select>
+                      </div>
+                      <div class="input-block">
+                        <label for="proxyInput" class="input-label">Proxy URL (Optional)</label>
+                        <input type="text" id="proxyInput" class="custom-input" placeholder="http://127.0.0.1:8080 or socks5://..." spellcheck="false" />
+                      </div>
+                    </div>
                   </div>
                 </div>
 

@@ -7,6 +7,7 @@ from .fetcher import Fetcher, FetchError, NonHtmlContent, RobotsDisallowed
 from .filters import URLFilter
 from .renderer import PlaywrightRenderer
 from .scraper import scrape_url
+from .sitemap import discover_sitemap_urls, fetch_sitemap_urls, parse_sitemap_xml
 from .writer import OUTPUT_FORMATS, OutputWriter
 
 __all__ = [
@@ -19,6 +20,9 @@ __all__ = [
     "extract_structured",
     "validate_selectors",
     "scrape_url",
+    "discover_sitemap_urls",
+    "fetch_sitemap_urls",
+    "parse_sitemap_xml",
     "Fetcher",
     "FetchError",
     "NonHtmlContent",

@@ -23,6 +23,8 @@ def scrape_url(
     respect_robots: bool = True,
     chunk_size: int = 0,
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
+    impersonate: str | bool | None = None,
+    proxy: str | None = None,
     logger: logging.Logger | None = None,
     fetcher: Fetcher | None = None,
     renderer: PlaywrightRenderer | None = None,
@@ -35,7 +37,12 @@ def scrape_url(
     logger = logger or logging.getLogger(__name__)
     validate_selectors(target_selector, exclude_selectors)
     owns_fetcher = fetcher is None
-    fetcher = fetcher or Fetcher(logger=logger, respect_robots=respect_robots)
+    fetcher = fetcher or Fetcher(
+        logger=logger,
+        respect_robots=respect_robots,
+        impersonate=impersonate,
+        proxy=proxy,
+    )
     owns_renderer = renderer is None and render_js
     renderer = renderer or (PlaywrightRenderer(logger) if render_js else None)
 

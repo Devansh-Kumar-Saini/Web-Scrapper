@@ -185,17 +185,17 @@ flowchart LR
 ```
 
 ### Phase 1: High-Impact Developer Essentials (Weeks 1–2)
-- [ ] Add **Markdown (`.md`)** extraction and export using `html2text` / `markdownify`.
-- [ ] Add **Single-URL instant scrape API** (`POST /api/scrape`) with JSON/Markdown response.
-- [ ] Implement URL path filtering (`--include-pattern`, `--exclude-pattern`).
-- [ ] Add CSS selector targeting (`--selector`, `--exclude-selector`).
-- [ ] Create permissive open-source `LICENSE` (MIT) and `pyproject.toml`.
+- [x] Add **Markdown (`.md`)** extraction and export using `html2text` / `markdownify`.
+- [x] Add **Single-URL instant scrape API** (`POST /api/scrape`) with JSON/Markdown response.
+- [x] Implement URL path filtering (`--include-pattern`, `--exclude-pattern`).
+- [x] Add CSS selector targeting (`--selector`, `--exclude-selector`).
+- [x] Create permissive open-source `LICENSE` (MIT) and `pyproject.toml`.
 
 ### Phase 2: Performance & Engine Upgrades (Weeks 3–4)
-- [ ] Convert crawler fetch pipeline to concurrent worker pool (Async / ThreadPool).
-- [ ] Add `sitemap.xml` parser for rapid seed population.
-- [ ] Integrate `curl_cffi` for lightweight TLS browser impersonation.
-- [ ] Support `--stdout` and `--json` pipeable CLI outputs.
+- [x] Convert crawler fetch pipeline to concurrent worker pool (Async / ThreadPool).
+- [x] Add `sitemap.xml` parser for rapid seed population.
+- [x] Integrate `curl_cffi` for lightweight TLS browser impersonation.
+- [x] Support `--stdout` and `--json` pipeable CLI outputs.
 
 ### Phase 3: Web UI Playground & Advanced Options (Weeks 5–6)
 - [ ] Add "Quick Scrape Playground" in UI for single-page live testing.

@@ -2,6 +2,7 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 markdownify>=0.13.1
+curl_cffi>=0.7.0
 playwright>=1.40.0
 Flask>=3.0.0
 gunicorn>=21.2.0
