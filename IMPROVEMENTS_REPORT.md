@@ -199,10 +199,10 @@ flowchart LR
 - [x] Support `--stdout` and `--json` pipeable CLI outputs.
 
 ### Phase 3: Web UI Playground & Advanced Options (Weeks 5–6)
-- [ ] Add "Quick Scrape Playground" in UI for single-page live testing.
-- [ ] Add Selector Tester with live preview in UI.
-- [ ] Provide format selector in UI (Download ZIP as Markdown, TXT, or JSONL).
-- [ ] Add optional Webhook completion callback.
+- [x] Add "Quick Scrape Playground" in UI for single-page live testing.
+- [x] Add Selector Tester with live preview in UI.
+- [x] Provide format selector in UI (Download ZIP as Markdown, TXT, or JSONL).
+- [x] Add optional Webhook completion callback.
 
 ### Phase 4: Packaging, Integrations & Open-Source Release (Weeks 7–8)
 - [ ] Setup GitHub Actions CI (linting, tests, multi-OS builds).

@@ -111,6 +111,17 @@ python main.py
 | `--chunk-size` | Emit chunks of this many characters; `0` disables | `0` |
 | `--chunk-overlap` | Overlap between chunks in characters | `400` |
 | `--respect-robots` / `--no-respect-robots` | Enforce `robots.txt` | `True` |
+| `--concurrency` | Concurrent fetch workers | `5` |
+| `--delay` | Per-domain politeness delay in seconds | `0.2` |
+| `--sitemap` / `--no-sitemap` | Discover URLs from `sitemap.xml` | `False` |
+| `--sitemap-url` | Explicit sitemap URL to crawl | None |
+| `--impersonate` | `curl_cffi` TLS fingerprint (`chrome`, `safari`, `firefox`, `none`) | None |
+| `--proxy` | Route requests through an HTTP/SOCKS proxy | None |
+| `--stdout` | Print extracted content to stdout (pipe-friendly) | `False` |
+| `--json` | Print the structured JSON document to stdout | `False` |
+| `--dry-run` | List target URLs without downloading page bodies | `False` |
+| `--webhook` | POST a crawl summary to this URL when the job finishes | None |
+| `--config` | Load defaults from `.scraperrc` / `scraper.json` | None |
 | `--output-dir` | Folder for output files | `./output` |
 | `--ui` | Launch the web UI | `False` |
 | `--port` | Web UI port | `5000` |
@@ -171,10 +182,10 @@ The existing job API is unchanged:
 | `/api/scrape/events` | GET | SSE progress/log stream |
 | `/api/results` | GET | List saved pages from `index.json` |
 | `/api/results/file` | GET | Preview one saved file |
-| `/api/results/download` | GET | Download output directory as ZIP |
+| `/api/results/download` | GET | Download output directory as ZIP (`?format=md\|txt\|json\|jsonl` converts first) |
 | `/api/results/clear` | POST | Delete files in the output directory |
 
-`POST /api/scrape/start` also accepts `format`, `include_patterns`, `exclude_patterns`, `target_selector`, `exclude_selectors`, `chunk_size`, and `chunk_overlap`.
+`POST /api/scrape/start` also accepts `format`, `include_patterns`, `exclude_patterns`, `target_selector`, `exclude_selectors`, `chunk_size`, `chunk_overlap`, `concurrency`, `delay`, `sitemap`, `proxy`, and `webhook_url`. A configured webhook receives `crawl.completed`, `crawl.stopped`, or `crawl.failed` with page stats and saved file metadata.
 
 ## Python Library
 
@@ -210,9 +221,11 @@ UI features:
 
 - Seed URLs, depth slider, page cap, and same-domain toggle.
 - **Advanced extraction** panel for output format, target selector, excluded selectors, and include/exclude URL patterns.
+- **Single URL Inspector** with live selector preview: tweak target/exclude CSS selectors and the Markdown, text, JSON, and HTML tabs refresh automatically.
 - Live cached/saved/skipped counters and a streamed log console.
 - Click any saved page to preview its extracted content (works for TXT, Markdown, and JSON).
-- ZIP download of all output files.
+- ZIP download in the original format or converted on demand to Markdown, plain text, JSON, or JSONL.
+- Optional webhook callback that POSTs a crawl summary to your own backend on completion.
 - Native folder picker (macOS, Windows, Linux) when running locally.
 
 ## Output Formats

@@ -442,6 +442,12 @@
                         <span class="toggle-desc">Auto-discover URLs from site XML sitemap.</span>
                       </div>
                     </label>
+
+                    <div class="input-block">
+                      <label for="sitemapUrlInput" class="input-label">Custom Sitemap URL (Optional)</label>
+                      <input type="url" id="sitemapUrlInput" class="custom-input" placeholder="https://example.com/sitemap.xml" spellcheck="false" />
+                      <p class="input-desc">Leave empty to auto-discover from robots.txt and common sitemap locations.</p>
+                    </div>
                   </div>
                 </div>
 
@@ -468,6 +474,23 @@
                         <label for="proxyInput" class="input-label">Proxy URL (Optional)</label>
                         <input type="text" id="proxyInput" class="custom-input" placeholder="http://127.0.0.1:8080 or socks5://..." spellcheck="false" />
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Webhook Callback -->
+                <div class="card card-wide">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Webhook Callback (Optional)</h2>
+                      <span class="card-hint">POST a crawl summary to your backend as soon as the job finishes</span>
+                    </div>
+                  </div>
+                  <div class="card-body form-stack">
+                    <div class="input-block">
+                      <label for="webhookUrlInput" class="input-label">Webhook URL</label>
+                      <input type="url" id="webhookUrlInput" class="custom-input" placeholder="http://localhost:8000/api/ingest" spellcheck="false" />
+                      <p class="input-desc">Receives <code>crawl.completed</code>, <code>crawl.stopped</code>, or <code>crawl.failed</code> with page stats, output paths, and saved file metadata. Delivery failures never interrupt the crawl.</p>
                     </div>
                   </div>
                 </div>
@@ -739,12 +762,32 @@
                       </div>
                     </div>
 
-                    <label class="toggle-control-mini">
-                      <input type="checkbox" id="inspectorJsToggle" role="switch" aria-checked="false" />
-                      <span class="toggle-slider-mini"></span>
-                      <span>Render JavaScript (Playwright)</span>
-                    </label>
+                    <div class="inspector-toggle-group">
+                      <label class="toggle-control-mini">
+                        <input type="checkbox" id="inspectorJsToggle" role="switch" aria-checked="false" />
+                        <span class="toggle-slider-mini"></span>
+                        <span>Render JavaScript (Playwright)</span>
+                      </label>
+                      <label class="toggle-control-mini">
+                        <input type="checkbox" id="inspectorLiveToggle" role="switch" aria-checked="true" checked />
+                        <span class="toggle-slider-mini"></span>
+                        <span>Live selector preview</span>
+                      </label>
+                    </div>
                   </div>
+
+                  <div class="inspector-selector-row">
+                    <div class="input-block">
+                      <label for="inspectorSelectorInput" class="input-label">Target CSS Selector</label>
+                      <input type="text" id="inspectorSelectorInput" class="custom-input" placeholder="article, main, .markdown-body, #content" spellcheck="false" />
+                    </div>
+                    <div class="input-block">
+                      <label for="inspectorExcludeSelectorInput" class="input-label">Exclude Selectors</label>
+                      <input type="text" id="inspectorExcludeSelectorInput" class="custom-input" placeholder="nav, footer, .advertisement, .cookie-banner" spellcheck="false" />
+                    </div>
+                    <button type="button" id="inspectorUseSetupBtn" class="btn btn-secondary btn-sm inspector-use-setup">Use setup selectors</button>
+                  </div>
+                  <p class="input-desc">Tweak a selector and the preview refreshes automatically once a page has been inspected. Output tabs above render Markdown, text, JSON, and HTML from a single request.</p>
                 </div>
 
                 <!-- Inspector Results Panel -->
@@ -753,6 +796,8 @@
                     <span class="meta-tag" id="inspectorStatusTag">Status: 200 OK</span>
                     <span class="meta-item">Duration: <strong id="inspectorTime">0.0s</strong></span>
                     <span class="meta-item">Size: <strong id="inspectorSize">0 KB</strong></span>
+                    <span class="meta-item">Selector: <strong id="inspectorSelectorStatus">—</strong></span>
+                    <span class="meta-item">Words: <strong id="inspectorWordCount">0</strong></span>
                     <div class="inspector-actions">
                       <button type="button" class="btn btn-secondary btn-sm" id="inspectorCopyBtn">Copy Result</button>
                     </div>
@@ -875,6 +920,14 @@
                     </svg>
                     <span>Refresh</span>
                   </button>
+                  <label for="downloadFormatCatalog" class="visually-hidden">ZIP download format</label>
+                  <select id="downloadFormatCatalog" class="custom-input download-format-select" aria-label="ZIP download format">
+                    <option value="">Original files</option>
+                    <option value="md">Markdown (.md)</option>
+                    <option value="txt">Plain Text (.txt)</option>
+                    <option value="jsonl">JSON Lines (.jsonl)</option>
+                    <option value="json">JSON (.json)</option>
+                  </select>
                   <button type="button" id="downloadZipCatalogBtn" class="btn btn-primary btn-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -965,6 +1018,14 @@
                 </div>
                 <div class="card-actions">
                   <button type="button" id="refreshOutputListBtn" class="btn btn-secondary btn-sm">Refresh</button>
+                  <label for="downloadFormatOutput" class="visually-hidden">ZIP download format</label>
+                  <select id="downloadFormatOutput" class="custom-input download-format-select" aria-label="ZIP download format">
+                    <option value="">Original files</option>
+                    <option value="md">Markdown (.md)</option>
+                    <option value="txt">Plain Text (.txt)</option>
+                    <option value="jsonl">JSON Lines (.jsonl)</option>
+                    <option value="json">JSON (.json)</option>
+                  </select>
                   <button type="button" id="downloadZipBtn" class="btn btn-primary btn-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>

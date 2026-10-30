@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -17,6 +18,7 @@ try:
     from .extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
     from .filters import parse_patterns, parse_selectors
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from .webhook import notify, validate_webhook_url
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:  # pragma: no cover - direct script execution
     from config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
@@ -24,6 +26,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
     from filters import parse_patterns, parse_selectors
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from webhook import notify, validate_webhook_url
     from writer import OUTPUT_FORMATS, OutputWriter
 
 
@@ -192,6 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Proxy URL (e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:9050)",
     )
     parser.add_argument(
+        "--webhook",
+        type=str,
+        default=None,
+        help="POST a crawl summary to this URL when the job completes or fails",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -286,6 +295,11 @@ def run(args: argparse.Namespace) -> int:
     impersonate_val = args.impersonate
     if impersonate_val == "none":
         impersonate_val = None
+    try:
+        webhook_url = validate_webhook_url(getattr(args, "webhook", None))
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
 
     if getattr(args, "dry_run", False):
         crawler = Crawler(
@@ -328,6 +342,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     started = time.monotonic()
+    started_iso = datetime.now(timezone.utc).isoformat()
     writer = OutputWriter(args.output_dir, args.format)
     crawler = Crawler(
         args.depth,
@@ -346,6 +361,7 @@ def run(args: argparse.Namespace) -> int:
     )
     crawled = saved = failed = 0
     collected_documents = []
+    saved_pages_meta: list[dict[str, Any]] = []
     try:
         for page in crawler.crawl(urls):
             crawled += 1
@@ -375,13 +391,24 @@ def run(args: argparse.Namespace) -> int:
 
             filename = writer.save_document(document, page.depth)
             saved += 1
+            try:
+                size_bytes = (output / filename).stat().st_size
+            except OSError:
+                size_bytes = 0
+            saved_pages_meta.append({
+                "url": document.url,
+                "title": document.title,
+                "file": filename,
+                "depth": page.depth,
+                "bytes": size_bytes,
+                "format": args.format,
+            })
             if not is_piped:
                 print(f"[depth {page.depth}] saving {page.url} -> {output / filename}")
             else:
                 sys.stderr.write(f"[depth {page.depth}] saved {page.url}\n")
     finally:
         writer.finalize()
-        logging.shutdown()
 
     if getattr(args, "json", False) or (getattr(args, "stdout", False) and args.format == "json"):
         if len(collected_documents) == 1:
@@ -400,6 +427,28 @@ def run(args: argparse.Namespace) -> int:
         sys.stderr.write(summary_msg + "\n")
     else:
         print(summary_msg)
+
+    if webhook_url:
+        notify(
+            webhook_url,
+            event="crawl.completed",
+            status="completed",
+            urls=urls,
+            stats={
+                "pages_crawled": crawled,
+                "pages_saved": saved,
+                "pages_failed": failed,
+                "pages_skipped": skipped,
+                "files_written": files_written,
+                "elapsed_seconds": round(elapsed, 3),
+            },
+            output_dir=str(output),
+            started_at=started_iso,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            pages=saved_pages_meta,
+            logger=logger,
+        )
+    logging.shutdown()
     return 0
 
 

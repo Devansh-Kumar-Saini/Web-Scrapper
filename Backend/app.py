@@ -11,7 +11,6 @@ import subprocess
 import sys
 import threading
 import time
-import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,18 +23,24 @@ from flask import Flask, Response, jsonify, request, send_file
 try:
     from .config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from .crawler import Crawler
+    from .exporter import build_results_zip
+    from .exporter import normalize_format as normalize_download_format
     from .extractor import extract_structured, validate_selectors
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import parse_patterns, parse_selectors
     from .scraper import scrape_url
+    from .webhook import build_payload, deliver_webhook, validate_webhook_url
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:
     from config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from crawler import Crawler
+    from exporter import build_results_zip
+    from exporter import normalize_format as normalize_download_format
     from extractor import extract_structured, validate_selectors
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from filters import parse_patterns, parse_selectors
     from scraper import scrape_url
+    from webhook import build_payload, deliver_webhook, validate_webhook_url
     from writer import OUTPUT_FORMATS, OutputWriter
 
 # Determine project root and UI directory
@@ -187,8 +192,11 @@ class JobState:
     sitemap_url: str = ""
     impersonate: str = "chrome"
     proxy: str = ""
+    webhook_url: str = ""
     started_at: float | None = None
     finished_at: float | None = None
+    started_at_iso: str = ""
+    finished_at_iso: str = ""
     elapsed_seconds: float = 0.0
     pages_crawled: int = 0
     pages_saved: int = 0
@@ -266,6 +274,36 @@ class JobManager:
         self.broadcast("status", snap)
         self.broadcast("stats", snap)
 
+    def _notify_webhook(self, event: str, status: str, error: str | None = None) -> None:
+        """POST a crawl summary to the configured webhook, never raising."""
+        with self.lock:
+            url = self.state.webhook_url
+            if not url:
+                return
+            snapshot = self.get_snapshot()
+
+        stats = {
+            "pages_crawled": snapshot.get("pages_crawled", 0),
+            "pages_saved": snapshot.get("pages_saved", 0),
+            "pages_skipped": snapshot.get("pages_skipped", 0),
+            "elapsed_seconds": snapshot.get("elapsed_seconds", 0.0),
+        }
+        payload = build_payload(
+            event=event,
+            status=status,
+            urls=list(snapshot.get("urls", [])),
+            stats=stats,
+            output_dir=str(snapshot.get("output_dir", "")),
+            started_at=str(snapshot.get("started_at_iso", "")),
+            finished_at=str(snapshot.get("finished_at_iso") or datetime.now(timezone.utc).isoformat()),
+            error=error,
+            pages=list(snapshot.get("recent_pages", [])),
+        )
+
+        self.log("INFO", f"Delivering webhook '{event}' to {url}")
+        ok, message = deliver_webhook(url, payload)
+        self.log("INFO" if ok else "WARN", message)
+
     def start_crawl(
         self,
         urls: list[str],
@@ -287,6 +325,7 @@ class JobManager:
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
         proxy: str | None = None,
+        webhook_url: str = "",
     ) -> tuple[bool, str]:
         with self.lock:
             if self.state.status in {"running", "stopping"}:
@@ -314,7 +353,9 @@ class JobManager:
                 sitemap_url=sitemap_url,
                 impersonate=impersonate or "chrome",
                 proxy=proxy or "",
+                webhook_url=webhook_url or "",
                 started_at=time.monotonic(),
+                started_at_iso=datetime.now(timezone.utc).isoformat(),
             )
 
         self.worker_thread = threading.Thread(
@@ -339,6 +380,7 @@ class JobManager:
                 sitemap_url,
                 impersonate,
                 proxy,
+                webhook_url or "",
             ),
             daemon=True,
         )
@@ -378,6 +420,7 @@ class JobManager:
         sitemap_url: str = "",
         impersonate: str | None = "chrome",
         proxy: str | None = None,
+        webhook_url: str = "",
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -411,6 +454,8 @@ class JobManager:
             self.log("INFO", f"Target selector: {target_selector}")
         if exclude_selectors:
             self.log("INFO", f"Excluding selectors: {', '.join(exclude_selectors)}")
+        if webhook_url:
+            self.log("INFO", f"Webhook callback configured: {webhook_url}")
 
         writer = OutputWriter(str(out_path), output_format=output_format)
         crawler = Crawler(
@@ -486,6 +531,7 @@ class JobManager:
             with self.lock:
                 self.state.pages_skipped = len(crawler.skipped_reasons)
                 self.state.finished_at = time.monotonic()
+                self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
                 self.state.status = "completed"
                 saved_count = self.state.pages_saved
 
@@ -493,13 +539,19 @@ class JobManager:
                 self.log("WARN", "Crawl stopped by user. Manifest saved.")
             else:
                 self.log("INFO", f"Crawl completed successfully! Saved {saved_count} pages.")
+            self._notify_webhook(
+                "crawl.stopped" if stopped else "crawl.completed",
+                "stopped" if stopped else "completed",
+            )
         except Exception as exc:
             logger.exception("Crawl encountered an unhandled exception")
             with self.lock:
                 self.state.status = "failed"
                 self.state.finished_at = time.monotonic()
+                self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
                 self.state.error_message = str(exc)
             self.log("ERROR", f"Fatal error during crawl: {exc}")
+            self._notify_webhook("crawl.failed", "failed", error=str(exc))
         finally:
             logger.removeHandler(file_handler)
             logger.removeHandler(ui_handler)
@@ -709,10 +761,16 @@ def api_scrape_start() -> Any:
         return jsonify({"error": "delay must be a number."}), 400
     sitemap = _as_bool(data.get("sitemap"), False)
     sitemap_url = str(data.get("sitemap_url") or "").strip()
+    if sitemap_url and _valid_url(sitemap_url) is None:
+        return jsonify({"error": "sitemap_url must be a valid HTTP/HTTPS URL."}), 400
     impersonate = data.get("impersonate", "chrome")
     if impersonate == "none":
         impersonate = None
     proxy = str(data.get("proxy") or "").strip() or None
+    try:
+        webhook_url = validate_webhook_url(str(data.get("webhook_url") or data.get("webhook") or ""))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     started, msg = job_manager.start_crawl(
         urls=valid_urls,
@@ -734,6 +792,7 @@ def api_scrape_start() -> Any:
         sitemap_url=sitemap_url,
         impersonate=impersonate,
         proxy=proxy,
+        webhook_url=webhook_url,
     )
 
     if not started:
@@ -763,6 +822,7 @@ def api_scrape_start() -> Any:
             "sitemap_url": sitemap_url,
             "impersonate": impersonate,
             "proxy": proxy,
+            "webhook_url": webhook_url,
         },
     })
 
@@ -897,26 +957,27 @@ def api_results_download() -> Any:
     if not out_path.exists() or not out_path.is_dir():
         return jsonify({"error": "Output directory does not exist."}), 404
 
-    file_count = 0
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root_dir, _, files in os.walk(out_path):
-            for file in files:
-                file_full = Path(root_dir) / file
-                rel_path = file_full.relative_to(out_path)
-                zf.write(file_full, arcname=str(rel_path))
-                file_count += 1
+    raw_format = request.args.get("format") or request.args.get("download_format")
+    try:
+        target_format = normalize_download_format(raw_format)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    if file_count == 0:
-        return jsonify({"error": "No files found in output directory to download."}), 404
+    try:
+        zip_bytes = build_results_zip(out_path, target_format)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.exception("Failed to build results archive for %s", out_path)
+        return jsonify({"error": f"Failed to build ZIP archive: {exc}"}), 500
 
-    zip_buffer.seek(0)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = f"_{target_format}" if target_format else ""
     return send_file(
-        zip_buffer,
+        io.BytesIO(zip_bytes),
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"scraped_pages_{timestamp}.zip",
+        download_name=f"scraped_pages_{timestamp}{suffix}.zip",
     )
 
 

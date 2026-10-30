@@ -18,6 +18,11 @@
     eventSource: null,
     activeView: "viewCrawlSetup",
     inspectFormat: "markdown",
+    inspectDocument: null,
+    inspectHasRun: false,
+    inspectTimer: null,
+    inspectController: null,
+    inspectSeq: 0,
   };
 
   // --- DOM Element References ---
@@ -61,8 +66,10 @@
   const sameDomainInput = document.getElementById("sameDomainInput");
   const respectRobotsInput = document.getElementById("respectRobotsInput");
   const sitemapInput = document.getElementById("sitemapInput");
+  const sitemapUrlInput = document.getElementById("sitemapUrlInput");
   const impersonateInput = document.getElementById("impersonateInput");
   const proxyInput = document.getElementById("proxyInput");
+  const webhookUrlInput = document.getElementById("webhookUrlInput");
   const outputDirInput = document.getElementById("outputDirInput");
   const browseDirBtn = document.getElementById("browseDirBtn");
   const submitCrawlBtn = document.getElementById("submitCrawlBtn");
@@ -96,6 +103,12 @@
   const inspectorPreviewBlock = document.getElementById("inspectorPreviewBlock");
   const inspectorCopyBtn = document.getElementById("inspectorCopyBtn");
   const inspectFormatBtns = document.querySelectorAll("[data-inspect-format]");
+  const inspectorSelectorInput = document.getElementById("inspectorSelectorInput");
+  const inspectorExcludeSelectorInput = document.getElementById("inspectorExcludeSelectorInput");
+  const inspectorLiveToggle = document.getElementById("inspectorLiveToggle");
+  const inspectorSelectorStatus = document.getElementById("inspectorSelectorStatus");
+  const inspectorWordCount = document.getElementById("inspectorWordCount");
+  const inspectorUseSetupBtn = document.getElementById("inspectorUseSetupBtn");
 
   // Live Monitor & Console
   const monitorCrawledVal = document.getElementById("monitorCrawledVal");
@@ -116,6 +129,7 @@
   const catalogTotalCount = document.getElementById("catalogTotalCount");
   const refreshCatalogBtn = document.getElementById("refreshCatalogBtn");
   const downloadZipCatalogBtn = document.getElementById("downloadZipCatalogBtn");
+  const downloadFormatCatalog = document.getElementById("downloadFormatCatalog");
 
   // Output Storage
   const outputFolderLabel = document.getElementById("outputFolderLabel");
@@ -125,6 +139,7 @@
   const outputFileList = document.getElementById("outputFileList");
   const refreshOutputListBtn = document.getElementById("refreshOutputListBtn");
   const downloadZipBtn = document.getElementById("downloadZipBtn");
+  const downloadFormatOutput = document.getElementById("downloadFormatOutput");
   const clearOutputBtn = document.getElementById("clearOutputBtn");
 
   // Drawer Preview
@@ -579,7 +594,10 @@
     });
     sameDomainInput.checked = true;
     respectRobotsInput.checked = true;
+    if (sitemapInput) sitemapInput.checked = false;
+    if (sitemapUrlInput) sitemapUrlInput.value = "";
     if (outputDirInput) outputDirInput.value = "./output";
+    if (webhookUrlInput) webhookUrlInput.value = "";
     selectorInput.value = "";
     excludeSelectorInput.value = "";
     chunkSizeInput.value = 0;
@@ -628,8 +646,10 @@
     const concurrency = concurrencyInput ? (parseInt(concurrencyInput.value, 10) || 5) : 5;
     const delay = delayInput ? (parseFloat(delayInput.value) >= 0 ? parseFloat(delayInput.value) : 0.2) : 0.2;
     const sitemap = sitemapInput ? sitemapInput.checked : false;
+    const sitemapUrl = sitemapUrlInput ? sitemapUrlInput.value.trim() : "";
     const impersonate = impersonateInput ? impersonateInput.value : "chrome";
     const proxy = proxyInput ? proxyInput.value.trim() : "";
+    const webhookUrl = webhookUrlInput ? webhookUrlInput.value.trim() : "";
 
     // Disable start buttons, show loading state
     setLaunchState(true);
@@ -655,8 +675,10 @@
           concurrency,
           delay,
           sitemap,
+          sitemap_url: sitemapUrl,
           impersonate,
           proxy,
+          webhook_url: webhookUrl,
         }),
       });
 
@@ -950,77 +972,196 @@
   // =========================================================================
   // Single URL Inspector (Interactive Scraper Tester)
   // =========================================================================
-  inspectFormatBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      inspectFormatBtns.forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.inspectFormat = btn.getAttribute("data-inspect-format");
-    });
-  });
+  const INSPECT_BUTTON_HTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+    <span>Inspect Page</span>
+  `;
 
-  inspectScrapeBtn.addEventListener("click", async () => {
+  function inspectorContentFor(format, documentData) {
+    if (!documentData) return "";
+    switch (format) {
+      case "text":
+        return documentData.text || "";
+      case "json":
+        return JSON.stringify(documentData, null, 2);
+      case "html":
+        return documentData.html || "";
+      case "markdown":
+      default:
+        return documentData.markdown || documentData.text || "";
+    }
+  }
+
+  function renderInspectorPreview() {
+    if (!state.inspectDocument) return;
+    const content = inspectorContentFor(state.inspectFormat, state.inspectDocument);
+    inspectorPreviewBlock.textContent = content || "[Empty response]";
+    inspectorSize.textContent = `${(new Blob([content]).size / 1024).toFixed(1)} KB`;
+  }
+
+  function updateInspectorMeta(documentData, elapsed, httpStatus) {
+    inspectorMetaBar.style.display = "flex";
+    inspectorStatusTag.style.color = "";
+    inspectorStatusTag.textContent = `HTTP ${httpStatus || documentData.status_code || 200} OK`;
+    inspectorTime.textContent = `${elapsed}s`;
+    inspectorWordCount.textContent = String(documentData.word_count || 0);
+
+    const selector = inspectorSelectorInput ? inspectorSelectorInput.value.trim() : "";
+    if (!selector) {
+      inspectorSelectorStatus.textContent = "full page";
+      inspectorSelectorStatus.style.color = "";
+    } else if (documentData.selector_matched !== false) {
+      inspectorSelectorStatus.textContent = "matched";
+      inspectorSelectorStatus.style.color = "var(--success)";
+    } else {
+      inspectorSelectorStatus.textContent = "not found (body fallback)";
+      inspectorSelectorStatus.style.color = "var(--warning, var(--danger))";
+    }
+    renderInspectorPreview();
+  }
+
+  async function runInspectorScrape({ live = false } = {}) {
     const url = inspectorUrl.value.trim();
     if (!url) {
-      showToast("Please enter a URL to inspect", "warn");
+      if (!live) showToast("Please enter a URL to inspect", "warn");
       return;
     }
 
-    inspectScrapeBtn.disabled = true;
-    inspectScrapeBtn.innerHTML = `<span>Inspecting...</span>`;
-    inspectorPreviewBlock.textContent = `Connecting to ${url} and extracting content...`;
-    inspectorMetaBar.style.display = "none";
+    if (state.inspectTimer) {
+      clearTimeout(state.inspectTimer);
+      state.inspectTimer = null;
+    }
+    if (state.inspectController) state.inspectController.abort();
+    const controller = new AbortController();
+    state.inspectController = controller;
+    const seq = ++state.inspectSeq;
+
+    if (!live) {
+      inspectScrapeBtn.disabled = true;
+      inspectScrapeBtn.innerHTML = `<span>Inspecting...</span>`;
+      inspectorPreviewBlock.textContent = `Connecting to ${url} and extracting content...`;
+      inspectorMetaBar.style.display = "none";
+    }
 
     const startTime = performance.now();
     try {
       const resp = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           url,
-          format: state.inspectFormat,
+          // JSON carries Markdown, text, HTML, and metadata, so every output
+          // tab renders instantly without re-fetching the page.
+          format: "json",
           render_js: inspectorJsToggle.checked,
-          target_selector: selectorInput.value.trim() || undefined,
-          exclude_selectors: excludeSelectorInput.value.trim() || undefined,
+          target_selector: inspectorSelectorInput.value.trim() || undefined,
+          exclude_selectors: inspectorExcludeSelectorInput.value.trim() || undefined,
           impersonate: impersonateInput ? impersonateInput.value : undefined,
           proxy: proxyInput ? proxyInput.value.trim() || undefined : undefined,
         }),
       });
 
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error((json && json.error) || `HTTP ${resp.status}`);
+      if (seq !== state.inspectSeq) return;
+
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-      let content = "";
+      state.inspectDocument = json;
+      state.inspectHasRun = true;
+      updateInspectorMeta(json, elapsed, resp.status);
 
-      if (state.inspectFormat === "json") {
-        const json = await resp.json();
-        if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
-        content = JSON.stringify(json, null, 2);
-      } else {
-        content = await resp.text();
-        if (!resp.ok) throw new Error(content || `HTTP ${resp.status}`);
-      }
-
-      inspectorPreviewBlock.textContent = content || "[Empty response]";
-      inspectorMetaBar.style.display = "flex";
-      inspectorStatusTag.textContent = `HTTP ${resp.status} OK`;
-      inspectorTime.textContent = `${elapsed}s`;
-      inspectorSize.textContent = `${(new Blob([content]).size / 1024).toFixed(1)} KB`;
-
-      showToast("Page scraped and rendered successfully!", "success");
+      if (!live) showToast("Page scraped and rendered successfully!", "success");
     } catch (err) {
+      if (err.name === "AbortError" || seq !== state.inspectSeq) return;
       inspectorPreviewBlock.textContent = `Scrape Error:\n${err.message}`;
       inspectorMetaBar.style.display = "flex";
       inspectorStatusTag.textContent = "Failed";
       inspectorStatusTag.style.color = "var(--danger)";
-      showToast(`Inspector failed: ${err.message}`, "error");
+      inspectorSelectorStatus.textContent = "—";
+      inspectorWordCount.textContent = "0";
+      if (!live) showToast(`Inspector failed: ${err.message}`, "error");
     } finally {
-      inspectScrapeBtn.disabled = false;
-      inspectScrapeBtn.innerHTML = `
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-        <span>Inspect Page</span>
-      `;
+      if (seq === state.inspectSeq) {
+        inspectScrapeBtn.disabled = false;
+        inspectScrapeBtn.innerHTML = INSPECT_BUTTON_HTML;
+      }
+    }
+  }
+
+  function scheduleInspectorPreview() {
+    if (!inspectorLiveToggle || !inspectorLiveToggle.checked) return;
+    if (!state.inspectHasRun) return;
+    if (state.inspectTimer) clearTimeout(state.inspectTimer);
+    state.inspectTimer = setTimeout(() => {
+      state.inspectTimer = null;
+      runInspectorScrape({ live: true });
+    }, 650);
+  }
+
+  inspectFormatBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      inspectFormatBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.inspectFormat = btn.getAttribute("data-inspect-format");
+      renderInspectorPreview();
+    });
+  });
+
+  inspectScrapeBtn.addEventListener("click", () => runInspectorScrape());
+
+  inspectorUrl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      runInspectorScrape();
     }
   });
+
+  [inspectorSelectorInput, inspectorExcludeSelectorInput].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", scheduleInspectorPreview);
+    input.addEventListener("change", scheduleInspectorPreview);
+  });
+
+  if (inspectorJsToggle) {
+    inspectorJsToggle.addEventListener("change", scheduleInspectorPreview);
+  }
+
+  if (inspectorLiveToggle) {
+    inspectorLiveToggle.addEventListener("change", () => {
+      if (!inspectorLiveToggle.checked) {
+        if (state.inspectTimer) {
+          clearTimeout(state.inspectTimer);
+          state.inspectTimer = null;
+        }
+        return;
+      }
+      scheduleInspectorPreview();
+    });
+  }
+
+  if (inspectorUseSetupBtn) {
+    inspectorUseSetupBtn.addEventListener("click", () => {
+      if (inspectorSelectorInput) inspectorSelectorInput.value = selectorInput.value.trim();
+      if (inspectorExcludeSelectorInput) inspectorExcludeSelectorInput.value = excludeSelectorInput.value.trim();
+      showToast("Copied selectors from Crawl Setup", "info", 1600);
+      if (state.inspectHasRun) {
+        runInspectorScrape({ live: true });
+      } else if (inspectorUrl.value.trim()) {
+        runInspectorScrape();
+      }
+    });
+  }
+
+  // Keep the tester and the crawl setup in sync on first load.
+  if (inspectorSelectorInput && !inspectorSelectorInput.value) {
+    inspectorSelectorInput.value = selectorInput.value.trim();
+  }
+  if (inspectorExcludeSelectorInput && !inspectorExcludeSelectorInput.value) {
+    inspectorExcludeSelectorInput.value = excludeSelectorInput.value.trim();
+  }
 
   inspectorCopyBtn.addEventListener("click", async () => {
     const text = inspectorPreviewBlock.textContent;
@@ -1266,6 +1407,13 @@
     }
   }
 
+  function getDownloadFormat() {
+    const selects = [downloadFormatCatalog, downloadFormatOutput].filter(Boolean);
+    const visible = selects.find((select) => select.offsetParent !== null);
+    const active = visible || selects[0];
+    return active ? active.value || "" : "";
+  }
+
   async function downloadResultsZip() {
     if (state.isRunning) {
       showToast("A crawl job is currently running. Please stop it or wait for completion before downloading.", "warn");
@@ -1291,10 +1439,14 @@
         <span>Downloading...</span>
       `;
     });
-    showToast("Generating ZIP archive download...", "info");
+    const downloadFormat = getDownloadFormat();
+    const formatLabel = downloadFormat ? ` as ${downloadFormat.toUpperCase()}` : "";
+    showToast(`Generating ZIP archive download${formatLabel}...`, "info");
 
     try {
-      const resp = await fetch(`/api/results/download?output_dir=${encodeURIComponent(outDir)}`);
+      let downloadUrl = `/api/results/download?output_dir=${encodeURIComponent(outDir)}`;
+      if (downloadFormat) downloadUrl += `&format=${encodeURIComponent(downloadFormat)}`;
+      const resp = await fetch(downloadUrl);
       if (!resp.ok) {
         let errorMsg = `HTTP ${resp.status}`;
         try {
