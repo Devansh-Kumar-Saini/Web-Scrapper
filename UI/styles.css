@@ -40,7 +40,8 @@ html[data-theme="dark"] {
   --border-subtle: #262930;
   --border-medium: #30363d;
   --border-strong: #484f58;
-  --border-focus: #2563eb;
+  --border-control: #646b76;
+  --border-focus: #4d8dff;
 
   --text-main: #f4f4f5;
   --text-secondary: #b8bec6;
@@ -85,7 +86,8 @@ html[data-theme="light"] {
   --border-subtle: #d8dce3;
   --border-medium: #c3c9d2;
   --border-strong: #69707d;
-  --border-focus: #2563eb;
+  --border-control: #858c96;
+  --border-focus: #1d4ed8;
 
   --text-main: #14151a;
   --text-secondary: #3d424d;
@@ -3589,7 +3591,7 @@ select.custom-input {
 .log-warn .log-content { color: #e3b341; }
 .log-error .log-tag { color: var(--danger); border-color: #5a1e1e; background: #0d1117; }
 .log-error .log-content { color: #ff9c94; }
-.log-system .log-tag { color: var(--accent-text); border-color: #2a3c64; background: #0d1117; }
+.log-system .log-tag { color: #b4c5ff; border-color: #2a3c64; background: #0d1117; }
 .log-system .log-content { color: #c9d1d9; }
 
 /* --- Data table ----------------------------------------------------------- */
@@ -4368,4 +4370,175 @@ html[data-theme="light"] .custom-range::-moz-range-thumb {
 ::selection {
   background: var(--accent);
   color: #ffffff;
+}
+
+/* ==========================================================================
+   WCAG 2.2 AA — Contrast, focus appearance & keyboard affordances
+   Text tokens already meet 4.5:1. This layer raises interactive control
+   boundaries to >=3:1 and provides a 2px focus indicator with >=3:1 contrast.
+   ========================================================================== */
+
+:focus-visible {
+  outline: 2px solid var(--border-focus) !important;
+  outline-offset: 2px !important;
+}
+
+/* Interactive boundaries: form fields, buttons, chips and switches */
+.custom-textarea,
+.custom-input,
+.btn-secondary,
+.btn-danger,
+.btn-outline-danger,
+.icon-btn,
+.sample-chip,
+.preset-tag,
+.preset-pill,
+.format-card,
+.level-pill,
+.toggle-track,
+.toggle-slider-mini {
+  border-color: var(--border-control);
+}
+
+.btn-secondary:hover:not(:disabled),
+.btn-danger:hover:not(:disabled),
+.btn-outline-danger:hover:not(:disabled),
+.icon-btn:hover,
+.sample-chip:hover,
+.preset-tag:hover,
+.preset-pill:hover,
+.format-card:hover,
+.level-pill:hover {
+  border-color: var(--border-control);
+}
+
+/* Selected / active states */
+.nav-link.active {
+  box-shadow: inset 2px 0 0 var(--border-focus);
+}
+
+.preset-pill.active,
+.format-card.active,
+.level-pill.active,
+.status-running {
+  border-color: var(--border-focus);
+}
+
+/* Slider rail is the primary visual boundary of the control */
+.custom-range::-webkit-slider-runnable-track {
+  background: var(--border-control);
+}
+.custom-range::-moz-range-track {
+  background: var(--border-control);
+}
+
+/* Unselected radio indicator inside format cards */
+.format-name::before {
+  border-color: var(--border-control);
+}
+.format-card.active .format-name::before {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+}
+
+/* Keyboard focus for custom toggle and radio-card controls */
+.toggle-card:focus-within,
+.toggle-control-mini:focus-within,
+.format-card:focus-within {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Keep native inputs focusable while visually hidden (they previously used
+   display:none, which removed the switch/radio-card controls from tab order). */
+.toggle-card input[type="checkbox"],
+.toggle-control-mini input,
+.format-card input[type="radio"] {
+  display: block;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+}
+
+/* Prevent switches from showing a clipped focus ring on the hidden input */
+.toggle-card input[type="checkbox"]:focus-visible,
+.toggle-control-mini input:focus-visible,
+.format-card input[type="radio"]:focus-visible {
+  outline: none !important;
+}
+
+/* Links stay identifiable without relying on colour alone */
+.table-page-url,
+.drawer-url {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.table-page-url:hover,
+.drawer-url:hover {
+  color: var(--text-main);
+}
+
+/* Status badges keep a visible boundary while preserving state colours */
+.status-pill {
+  border-color: var(--border-control);
+}
+.status-pill.status-running {
+  border-color: var(--border-focus);
+}
+.status-pill.status-completed {
+  border-color: var(--success);
+}
+.status-pill.status-failed {
+  border-color: var(--danger);
+}
+.status-pill.status-stopping {
+  border-color: var(--warning);
+}
+
+/* Crawl-depth slider: blue circular handle */
+html[data-theme="dark"] .custom-range,
+html[data-theme="light"] .custom-range {
+  accent-color: var(--accent);
+}
+
+html[data-theme="dark"] .custom-range::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #f4f4f5;
+}
+html[data-theme="dark"] .custom-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #f4f4f5;
+}
+
+html[data-theme="light"] .custom-range::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #ffffff;
+}
+html[data-theme="light"] .custom-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #ffffff;
 }
