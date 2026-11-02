@@ -178,9 +178,10 @@
   // Theme Management
   // =========================================================================
   function initTheme() {
+    // Terminal Precision is dark-first. Respect an explicit user choice, but
+    // default to the instrument-panel dark theme on first load.
     const saved = localStorage.getItem("scrapper_theme");
-    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const theme = saved || (prefersDark ? "dark" : "light");
+    const theme = saved || "dark";
     setTheme(theme);
   }
 
