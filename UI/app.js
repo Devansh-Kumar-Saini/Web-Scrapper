@@ -23,6 +23,12 @@
     inspectTimer: null,
     inspectController: null,
     inspectSeq: 0,
+    velocityTimer: null,
+    velocitySamples: [],
+    lastVelocityTick: null,
+    latestCrawled: 0,
+    sessionAvgRate: 0,
+    peakRate: 0,
   };
 
   // --- DOM Element References ---
@@ -117,6 +123,11 @@
   const monitorSavedVal = document.getElementById("monitorSavedVal");
   const monitorSkippedVal = document.getElementById("monitorSkippedVal");
   const monitorElapsedVal = document.getElementById("monitorElapsedVal");
+  const monitorVelocityCard = document.querySelector(".telemetry-card-velocity");
+  const monitorRateVal = document.getElementById("monitorRateVal");
+  const monitorRatePeakVal = document.getElementById("monitorRatePeakVal");
+  const monitorRateAvgVal = document.getElementById("monitorRateAvgVal");
+  const monitorRateSparkline = document.getElementById("monitorRateSparkline");
   const monitorDepthTag = document.getElementById("monitorDepthTag");
   const monitorUrlText = document.getElementById("monitorUrlText");
   const terminalConsole = document.getElementById("terminalConsole");
@@ -704,6 +715,7 @@
       }
 
       showToast("Crawl job started successfully!", "success");
+      resetVelocity();
       updateStatus("running");
 
       // Auto-switch to Live Monitor so user can watch progress immediately
@@ -780,6 +792,7 @@
         state.crawlStartTime = Date.now();
         state.elapsedTimer = setInterval(updateElapsedTimer, 200);
       }
+      startVelocitySampling();
     } else {
       state.isRunning = false;
       globalStartBtn.disabled = false;
@@ -793,6 +806,7 @@
         clearInterval(state.elapsedTimer);
         state.elapsedTimer = null;
       }
+      stopVelocitySampling();
 
       if (status === "completed") {
         monitorDepthTag.textContent = "Finished";
@@ -812,6 +826,100 @@
     if (!state.crawlStartTime) return;
     const sec = ((Date.now() - state.crawlStartTime) / 1000).toFixed(1);
     monitorElapsedVal.textContent = `${sec}s`;
+  }
+
+  // --- Live throughput (pages/second) sampling & sparkline -----------------
+  const VELOCITY_SAMPLE_LIMIT = 40;
+
+  function resetVelocity() {
+    stopVelocitySampling();
+    state.velocitySamples = [];
+    state.lastVelocityTick = null;
+    state.latestCrawled = 0;
+    state.sessionAvgRate = 0;
+    state.peakRate = 0;
+    updateVelocityDisplay();
+  }
+
+  function startVelocitySampling() {
+    if (state.velocityTimer) return;
+    state.lastVelocityTick = { time: Date.now(), crawled: state.latestCrawled };
+    state.velocityTimer = setInterval(sampleVelocity, 1000);
+    if (monitorVelocityCard) monitorVelocityCard.classList.add("is-active");
+  }
+
+  function stopVelocitySampling() {
+    if (state.velocityTimer) {
+      clearInterval(state.velocityTimer);
+      state.velocityTimer = null;
+    }
+    state.lastVelocityTick = null;
+    if (monitorVelocityCard) monitorVelocityCard.classList.remove("is-active");
+  }
+
+  function sampleVelocity() {
+    if (!state.isRunning) return;
+
+    const now = Date.now();
+    const crawled = state.latestCrawled;
+    const previous = state.lastVelocityTick;
+
+    if (!previous) {
+      state.lastVelocityTick = { time: now, crawled };
+      return;
+    }
+
+    const deltaSeconds = (now - previous.time) / 1000;
+    const deltaPages = Math.max(0, crawled - previous.crawled);
+    const rate = deltaSeconds > 0 ? deltaPages / deltaSeconds : 0;
+
+    state.lastVelocityTick = { time: now, crawled };
+    state.velocitySamples.push(rate);
+    if (state.velocitySamples.length > VELOCITY_SAMPLE_LIMIT) {
+      state.velocitySamples.shift();
+    }
+    state.peakRate = Math.max(state.peakRate, rate);
+    updateVelocityDisplay();
+  }
+
+  function updateVelocityDisplay() {
+    const samples = state.velocitySamples;
+    const current = samples.length ? samples[samples.length - 1] : state.sessionAvgRate;
+    const peak = Math.max(state.peakRate, current);
+
+    if (monitorRateVal) monitorRateVal.textContent = (current || 0).toFixed(1);
+    if (monitorRatePeakVal) monitorRatePeakVal.textContent = `peak ${(peak || 0).toFixed(1)} p/s`;
+    if (monitorRateAvgVal) monitorRateAvgVal.textContent = (state.sessionAvgRate || 0).toFixed(1);
+
+    renderVelocitySparkline();
+  }
+
+  function renderVelocitySparkline() {
+    if (!monitorRateSparkline) return;
+
+    let series = state.velocitySamples.slice();
+    if (!series.length && state.sessionAvgRate > 0) {
+      series = [state.sessionAvgRate];
+    }
+    if (!series.length) {
+      monitorRateSparkline.setAttribute("points", "0,22 100,22");
+      return;
+    }
+
+    const maxRate = Math.max(...series, 1);
+    const step = series.length > 1 ? 100 / (series.length - 1) : 100;
+    const yFor = (rate) => 22 - (Math.max(0, rate) / maxRate) * 20;
+
+    const points = series.map((rate, index) => {
+      const x = series.length === 1 ? 0 : index * step;
+      return `${x.toFixed(2)},${yFor(rate).toFixed(2)}`;
+    });
+
+    if (series.length === 1) {
+      points.push(`100.00,${yFor(series[0]).toFixed(2)}`);
+    }
+
+    monitorRateSparkline.setAttribute("points", points.join(" "));
   }
 
   // =========================================================================
@@ -898,13 +1006,19 @@
   }
 
   function applyStats(snap) {
-    if (monitorCrawledVal) monitorCrawledVal.textContent = snap.pages_crawled ?? 0;
+    const crawled = Number(snap.pages_crawled) || 0;
+    const elapsed = Number(snap.elapsed_seconds) || 0;
+
+    state.latestCrawled = crawled;
+    state.sessionAvgRate = elapsed > 0 ? crawled / elapsed : 0;
+
+    if (monitorCrawledVal) monitorCrawledVal.textContent = crawled;
     if (monitorSavedVal) monitorSavedVal.textContent = snap.pages_saved ?? 0;
     if (monitorSkippedVal) monitorSkippedVal.textContent = snap.pages_skipped ?? 0;
     if (monitorElapsedVal) {
-      const elapsed = snap.elapsed_seconds ?? 0;
       monitorElapsedVal.textContent = `${elapsed}s`;
     }
+    updateVelocityDisplay();
 
     if (snap.current_url) {
       const depthStr = `Depth ${snap.current_depth ?? 0}`;
@@ -1373,6 +1487,7 @@
     state.crawlStartTime = null;
 
     // 2. Clear Live Monitor Telemetry Metrics
+    resetVelocity();
     if (monitorCrawledVal) monitorCrawledVal.textContent = "0";
     if (monitorSavedVal) monitorSavedVal.textContent = "0";
     if (monitorSkippedVal) monitorSkippedVal.textContent = "0";

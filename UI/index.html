@@ -873,6 +873,23 @@
                 <div class="telemetry-val text-accent" id="monitorElapsedVal">0.0s</div>
                 <div class="telemetry-sub">Job active duration</div>
               </div>
+
+              <div class="telemetry-card telemetry-card-velocity">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Pages / Second</span>
+                  <span class="telemetry-peak" id="monitorRatePeakVal">peak 0.0 p/s</span>
+                </div>
+                <div class="telemetry-val telemetry-velocity-val">
+                  <span id="monitorRateVal">0.0</span>
+                  <span class="telemetry-velocity-unit">p/s</span>
+                </div>
+                <div class="telemetry-sparkline-wrap">
+                  <svg class="telemetry-sparkline" viewBox="0 0 100 24" preserveAspectRatio="none" role="img" aria-label="Pages per second during the current session">
+                    <polyline id="monitorRateSparkline" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" points="0,22 100,22" />
+                  </svg>
+                </div>
+                <div class="telemetry-sub">Session avg <span id="monitorRateAvgVal">0.0</span> p/s</div>
+              </div>
             </div>
 
             <!-- Active URL Ticker Box -->
