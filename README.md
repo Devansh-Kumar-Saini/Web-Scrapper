@@ -4,6 +4,9 @@ A free, self-hosted, developer-first web scraper and crawler. It follows links t
 
 Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a dataset, archiving a site, or testing selectors and URL filters against a real page.
 
+![Home Page Image](Screenshots/homePage.png)
+![Scrapping Image](Screenshots/scrapping.png)
+
 ## Features
 
 - **RAG-ready Markdown** with headings, lists, links, tables, images, and code blocks preserved.
@@ -14,36 +17,6 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 - **Polite crawling**: per-domain pacing and `robots.txt` enforcement.
 - **JavaScript rendering** via a lazily loaded, reusable local Playwright browser (optional).
 - **Live progress** in the web UI over Server-Sent Events (SSE).
-
-## Directory Structure
-
-```text
-Website_Scrapper/
-├── Backend/
-│   ├── __init__.py      # Public Python exports
-│   ├── app.py           # Flask server, REST API, and SSE stream
-│   ├── cli.py           # Command-line interface
-│   ├── config.py        # Settings and constants
-│   ├── crawler.py       # Breadth-first crawler with URL filters
-│   ├── extractor.py     # Text, Markdown, metadata, links, images, chunking
-│   ├── fetcher.py       # HTTP fetching, retries, robots.txt, pacing
-│   ├── filters.py       # Glob/regex include & exclude filtering
-│   ├── renderer.py      # Lazy Playwright renderer
-│   ├── scraper.py       # Single-URL scrape service
-│   └── writer.py        # TXT / MD / JSON / JSONL output writer
-├── UI/
-│   ├── index.html
-│   ├── styles.css
-│   └── app.js
-├── tests/
-│   ├── test_output_directory.py
-│   └── test_phase1.py
-├── output/              # Default output directory
-├── main.py              # CLI entry point
-├── pyproject.toml       # PEP 621 packaging and tool configuration
-├── LICENSE              # MIT
-└── requirements.txt
-```
 
 ## Install
 
@@ -266,37 +239,6 @@ The output directory also contains `index.json` (manifest of saved pages) and `s
 ### Chunking
 
 `--chunk-size` is measured in characters, not tokens (a rough approximation is four characters per token). Chunks split on paragraph boundaries when possible and include `--chunk-overlap` characters of context from the previous chunk. A size of `4000` with an overlap of `400` is a practical starting point for RAG.
-
-## Deploying to Render (Free)
-
-This project can deploy both the UI and backend on Render for free.
-
-### Option A: Docker Deployment (Recommended — Full JavaScript/SPA Support)
-
-Websites built with React, Vite, Vue, or Next.js need a headless browser to render text.
-
-1. Push your repository to GitHub.
-2. In the [Render Dashboard](https://dashboard.render.com/), choose **New +** > **Web Service**.
-3. Connect your repository.
-4. Render will auto-detect the `Dockerfile` (**Runtime: Docker**).
-5. Select the **Free** instance type and click **Deploy Web Service**.
-
-### Option B: Native Python Deployment (Standard HTML Only)
-
-If you do not need JavaScript rendering:
-
-- **Runtime**: `Python 3`
-- **Build Command**: `pip install -r requirements.txt`
-- **Start Command**: `gunicorn wsgi:app --workers 1 --threads 8 --timeout 300`
-- **Instance Type**: `Free`
-
-## Development
-
-```bash
-pip install -e ".[dev]"
-python -m pytest
-ruff check .
-```
 
 The test suite covers the folder picker and output directory handling, plus Phase 1 features: Markdown/metadata extraction, selectors, URL filters, all output formats, robots.txt handling, and the single-page API.
 
