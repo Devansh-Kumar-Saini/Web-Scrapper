@@ -714,9 +714,9 @@
         throw new Error(data.error || "Failed to start crawler");
       }
 
-      showToast("Crawl job started successfully!", "success");
+      showToast(dryRun ? "Dry run started! Discovering URLs..." : "Crawl job started successfully!", "success");
       resetVelocity();
-      updateStatus("running");
+      updateStatus("running", "", dryRun);
 
       // Auto-switch to Live Monitor so user can watch progress immediately
       switchView("viewMonitor");
@@ -767,14 +767,47 @@
     }
   });
 
+  // --- Active Status Polling Heartbeat (Fallback resilience) ---
+  let statusPollTimer = null;
+
+  function startStatusPolling() {
+    if (statusPollTimer) return;
+    statusPollTimer = setInterval(async () => {
+      if (!state.isRunning) {
+        stopStatusPolling();
+        return;
+      }
+      try {
+        const resp = await fetch("/api/scrape/status");
+        if (resp.ok) {
+          const snap = await resp.json();
+          if (snap.status && snap.status !== "running") {
+            syncSnapshot(snap);
+            stopStatusPolling();
+          }
+        }
+      } catch (_) {
+        // Transient network errors ignored; SSE or next poll will catch it
+      }
+    }, 1000);
+  }
+
+  function stopStatusPolling() {
+    if (statusPollTimer) {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
+    }
+  }
+
   // Status updates
-  function updateStatus(status, errorMsg = "") {
+  function updateStatus(status, errorMsg = "", isDryRun = false) {
     statusPill.className = `status-pill status-${status}`;
     const labels = {
       idle: "Idle",
-      running: "Crawling...",
+      running: isDryRun ? "Discovering..." : "Crawling...",
       stopping: "Stopping...",
       completed: "Completed",
+      stopped: "Stopped",
       failed: "Failed",
     };
     statusText.textContent = labels[status] || status;
@@ -786,15 +819,17 @@
       globalStopBtn.disabled = false;
       topbarTicker.style.display = "flex";
       sidebarPulse.className = "pulse-dot pulsing";
-      sidebarStatusText.textContent = "Crawl in Progress";
+      sidebarStatusText.textContent = isDryRun ? "Dry Run in Progress" : "Crawl in Progress";
 
       if (!state.elapsedTimer) {
         state.crawlStartTime = Date.now();
         state.elapsedTimer = setInterval(updateElapsedTimer, 200);
       }
       startVelocitySampling();
+      startStatusPolling();
     } else {
       state.isRunning = false;
+      stopStatusPolling();
       globalStartBtn.disabled = false;
       submitCrawlBtn.disabled = false;
       globalStopBtn.disabled = true;
@@ -810,10 +845,19 @@
 
       if (status === "completed") {
         monitorDepthTag.textContent = "Finished";
-        monitorUrlText.textContent = "All pages crawled and saved to output folder.";
-        showToast("Crawl finished successfully!", "success");
-        fetchSavedPages();
-        fetchOutputDirectory();
+        if (isDryRun) {
+          monitorUrlText.textContent = "Dry run complete. Discovered URLs listed in logs.";
+          showToast("Dry run completed successfully!", "success");
+        } else {
+          monitorUrlText.textContent = "All pages crawled and saved to output folder.";
+          showToast("Crawl finished successfully!", "success");
+          fetchSavedPages();
+          fetchOutputDirectory();
+        }
+      } else if (status === "stopped") {
+        monitorDepthTag.textContent = "Stopped";
+        monitorUrlText.textContent = isDryRun ? "Dry run stopped by user." : "Crawl stopped by user.";
+        showToast(isDryRun ? "Dry run stopped" : "Crawl stopped", "info");
       } else if (status === "failed") {
         monitorDepthTag.textContent = "Error";
         monitorUrlText.textContent = errorMsg || "Crawl ended due to an error.";
@@ -950,6 +994,15 @@
       }
     });
 
+    state.eventSource.addEventListener("completed", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        syncSnapshot(data);
+      } catch (err) {
+        console.error("Failed to parse SSE completed:", err);
+      }
+    });
+
     state.eventSource.addEventListener("stats", (e) => {
       try {
         const snap = JSON.parse(e.data);
@@ -1002,10 +1055,14 @@
       }
     }
 
-    updateStatus(snap.status || "idle", snap.error_message);
+    updateStatus(snap.status || "idle", snap.error_message, Boolean(snap.dry_run));
   }
 
   function applyStats(snap) {
+    if (snap.status && snap.status !== "running" && state.isRunning) {
+      updateStatus(snap.status, snap.error_message, Boolean(snap.dry_run));
+    }
+
     const crawled = Number(snap.pages_crawled) || 0;
     const elapsed = Number(snap.elapsed_seconds) || 0;
 

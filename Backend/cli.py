@@ -323,21 +323,32 @@ def run(args: argparse.Namespace) -> int:
             proxy=args.proxy,
             render_js=getattr(args, "render_js", False),
         )
-        discovered_urls = list(urls)
-        if args.sitemap or args.sitemap_url:
-            if args.sitemap_url:
-                discovered_urls.extend(fetch_sitemap_urls(args.sitemap_url, max_urls=args.max_pages))
-            elif args.sitemap:
-                for seed in urls:
-                    for s_url in discover_sitemap_urls(seed):
-                        discovered_urls.extend(fetch_sitemap_urls(s_url, max_urls=args.max_pages))
-
         valid_targets = []
-        for u in dict.fromkeys(discovered_urls):
-            if not crawler.url_filter.excluded_by(u):
-                valid_targets.append(u)
-                if len(valid_targets) >= args.max_pages:
-                    break
+        crawled_any = False
+        try:
+            for page in crawler.crawl(urls):
+                crawled_any = True
+                valid_targets.append(page.url)
+                if not getattr(args, "json", False):
+                    logger.info("[depth %d] Discovered %s", page.depth, page.url)
+        except Exception as exc:
+            logger.warning("Crawl discovery error: %s", exc)
+
+        if not crawled_any:
+            discovered_urls = list(urls)
+            if args.sitemap or args.sitemap_url:
+                if args.sitemap_url:
+                    discovered_urls.extend(fetch_sitemap_urls(args.sitemap_url, max_urls=args.max_pages))
+                elif args.sitemap:
+                    for seed in urls:
+                        for s_url in discover_sitemap_urls(seed):
+                            discovered_urls.extend(fetch_sitemap_urls(s_url, max_urls=args.max_pages))
+
+            for u in dict.fromkeys(discovered_urls):
+                if not crawler.url_filter.excluded_by(u):
+                    valid_targets.append(u)
+                    if len(valid_targets) >= args.max_pages:
+                        break
 
         if getattr(args, "json", False):
             print(json.dumps({"dry_run": True, "target_urls": valid_targets, "total": len(valid_targets)}, indent=2))

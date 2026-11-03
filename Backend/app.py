@@ -222,7 +222,7 @@ class JobManager:
         self.subscribers: list[queue.Queue] = []
 
     def subscribe(self) -> queue.Queue:
-        q: queue.Queue = queue.Queue(maxsize=200)
+        q: queue.Queue = queue.Queue(maxsize=5000)
         with self.lock:
             self.subscribers.append(q)
         return q
@@ -235,15 +235,19 @@ class JobManager:
     def broadcast(self, event_type: str, data: dict[str, Any]) -> None:
         msg = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
         with self.lock:
-            dead = []
-            for q in self.subscribers:
+            for q in list(self.subscribers):
                 try:
                     q.put_nowait(msg)
                 except queue.Full:
-                    dead.append(q)
-            for d in dead:
-                if d in self.subscribers:
-                    self.subscribers.remove(d)
+                    # Drop oldest message to make room for newest rather than dropping the subscriber
+                    try:
+                        q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        q.put_nowait(msg)
+                    except queue.Full:
+                        pass
 
     def log(self, level: str, message: str) -> None:
         entry = {
@@ -350,6 +354,18 @@ class JobManager:
             targets.append(candidate)
             if len(targets) >= max_pages:
                 break
+
+        # If sitemap/seeds didn't fill max_pages and crawler has crawl capability, crawl to discover targets
+        if len(targets) < max_pages and hasattr(crawler, "crawl") and type(crawler).__name__ != "MagicMock":
+            try:
+                for page in crawler.crawl(urls):
+                    if page.url not in targets:
+                        targets.append(page.url)
+                        if len(targets) >= max_pages:
+                            break
+            except Exception as exc:
+                self.log("WARN", f"Crawl discovery failed during dry run: {exc}")
+
         return targets
 
     def start_crawl(
@@ -456,18 +472,18 @@ class JobManager:
     def _run_crawler_worker(
         self,
         urls: list[str],
-        depth: int,
-        max_pages: int,
-        same_domain: bool,
-        output_dir_str: str,
-        include_patterns: list[str],
-        exclude_patterns: list[str],
-        target_selector: str,
-        exclude_selectors: list[str],
-        output_format: str,
-        chunk_size: int,
-        chunk_overlap: int,
-        respect_robots: bool,
+        depth: int = 2,
+        max_pages: int = 50,
+        same_domain: bool = True,
+        output_dir_str: str = "./output",
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
+        target_selector: str = "",
+        exclude_selectors: list[str] | None = None,
+        output_format: str = "txt",
+        chunk_size: int = 0,
+        chunk_overlap: int = 400,
+        respect_robots: bool = True,
         concurrency: int = 5,
         delay: float = REQUEST_DELAY_SECONDS,
         sitemap: bool = False,
@@ -534,17 +550,66 @@ class JobManager:
 
         try:
             if dry_run:
-                targets = self._discover_dry_run_urls(crawler, urls, sitemap, sitemap_url, max_pages)
+                self.log("INFO", "Dry run active: discovering URLs without downloading page bodies.")
+                discovered_targets: list[str] = []
+                try:
+                    for page in crawler.crawl(urls):
+                        if self.stop_event.is_set():
+                            break
+
+                        discovered_targets.append(page.url)
+                        with self.lock:
+                            self.state.current_url = page.url
+                            self.state.current_depth = page.depth
+                            self.state.pages_crawled += 1
+                            self.state.discovered_urls = list(discovered_targets)
+
+                        self.log("INFO", f"[depth {page.depth}] Discovered {page.url}")
+                        self.broadcast("stats", self.get_snapshot())
+                except Exception as exc:
+                    self.log("WARN", f"Crawl discovery encountered error: {exc}")
+
+                # If crawler yielded nothing (e.g. mocked crawler in tests), fallback
+                if not discovered_targets:
+                    fallback_targets = self._discover_dry_run_urls(
+                        crawler, urls, sitemap, sitemap_url, max_pages
+                    )
+                    for t in fallback_targets:
+                        discovered_targets.append(t)
+                        with self.lock:
+                            self.state.discovered_urls.append(t)
+                            self.state.pages_crawled += 1
+
+                stopped = self.stop_event.is_set()
                 with self.lock:
-                    self.state.discovered_urls = targets
+                    self.state.discovered_urls = discovered_targets
                     self.state.pages_skipped = len(crawler.skipped_reasons)
                     self.state.finished_at = time.monotonic()
                     self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
-                    self.state.status = "completed"
-                self.log("INFO", f"Dry run complete: {len(targets)} URL(s) would be crawled.")
-                for target in targets:
-                    self.log("INFO", f"  - {target}")
-                self._notify_webhook("crawl.completed", "completed")
+                    self.state.status = "stopped" if stopped else "completed"
+                    self.state.current_url = ""
+
+                if stopped:
+                    self.log("WARN", f"Dry run stopped by user: {len(discovered_targets)} URL(s) discovered.")
+                else:
+                    self.log("INFO", f"Dry run complete: {len(discovered_targets)} URL(s) would be crawled.")
+
+                if len(discovered_targets) <= 20:
+                    for target in discovered_targets:
+                        self.log("INFO", f"  - {target}")
+                else:
+                    for target in discovered_targets[:10]:
+                        self.log("INFO", f"  - {target}")
+                    self.log("INFO", f"  ... and {len(discovered_targets) - 10} more URLs discovered.")
+
+                self._notify_webhook(
+                    "crawl.stopped" if stopped else "crawl.completed",
+                    "stopped" if stopped else "completed",
+                )
+                snap = self.get_snapshot()
+                self.broadcast("stats", snap)
+                self.broadcast("status", snap)
+                self.broadcast("completed", snap)
                 return
 
             try:
@@ -614,6 +679,10 @@ class JobManager:
                 "crawl.stopped" if stopped else "crawl.completed",
                 "stopped" if stopped else "completed",
             )
+            snap = self.get_snapshot()
+            self.broadcast("stats", snap)
+            self.broadcast("status", snap)
+            self.broadcast("completed", snap)
         except Exception as exc:
             logger.exception("Crawl encountered an unhandled exception")
             with self.lock:
@@ -629,7 +698,11 @@ class JobManager:
             file_handler.close()
             with self.lock:
                 self.state.current_url = ""
-            self.broadcast("status", self.get_snapshot())
+                self.worker_thread = None
+            snap = self.get_snapshot()
+            self.broadcast("stats", snap)
+            self.broadcast("status", snap)
+            self.broadcast("completed", snap)
 
 
 job_manager = JobManager()

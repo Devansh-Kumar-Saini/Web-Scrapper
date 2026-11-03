@@ -213,6 +213,79 @@ class TestParityOptions(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.assertTrue(mock_crawler_cls.call_args.kwargs["render_js"])
 
+    @patch("Backend.app.Crawler")
+    def test_dry_run_crawls_and_discovers_links_without_saving(self, mock_crawler_cls):
+        mock_inst = MagicMock()
+        mock_inst.skipped_reasons = []
+        p1 = MagicMock(url="https://example.com", depth=0, title="Home")
+        p2 = MagicMock(url="https://example.com/about", depth=1, title="About")
+        p3 = MagicMock(url="https://example.com/contact", depth=1, title="Contact")
+        mock_inst.crawl.return_value = [p1, p2, p3]
+        mock_crawler_cls.return_value = mock_inst
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = JobManager()
+            manager._run_crawler_worker(
+                urls=["https://example.com"],
+                depth=2,
+                max_pages=10,
+                same_domain=True,
+                output_dir_str=temp_dir,
+                dry_run=True,
+            )
+            snapshot = manager.get_snapshot()
+
+            self.assertEqual(snapshot["status"], "completed")
+            self.assertEqual(snapshot["pages_crawled"], 3)
+            self.assertEqual(snapshot["pages_saved"], 0)
+            self.assertEqual(
+                snapshot["discovered_urls"],
+                ["https://example.com", "https://example.com/about", "https://example.com/contact"],
+            )
+            # Verify no page body files or index.json were written to the output dir
+            saved_pages = [f for f in Path(temp_dir).glob("*") if f.name != "scrape_log.txt"]
+            self.assertEqual(len(saved_pages), 0)
+
+    @patch("Backend.cli.Crawler")
+    def test_cli_dry_run_crawls_multiple_pages(self, mock_crawler_cls):
+        mock_inst = MagicMock()
+        mock_inst.skipped_reasons = []
+        mock_inst.crawl.return_value = [
+            MagicMock(url="https://example.com", depth=0),
+            MagicMock(url="https://example.com/sub", depth=1),
+        ]
+        mock_crawler_cls.return_value = mock_inst
+
+        captured_stdout = io.StringIO()
+        with patch("sys.stdout", captured_stdout):
+            ret = run(parse_args(["--url", "https://example.com", "--dry-run", "--json"]))
+            self.assertEqual(ret, 0)
+        data = json.loads(captured_stdout.getvalue())
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(data["target_urls"], ["https://example.com", "https://example.com/sub"])
+
+    def test_subscriber_queue_resilience_and_completion_broadcast(self):
+        manager = JobManager()
+        q = manager.subscribe()
+
+        # Broadcast burst of messages
+        for i in range(250):
+            manager.broadcast("log", {"index": i})
+
+        manager.broadcast("status", {"status": "completed"})
+        manager.broadcast("completed", {"status": "completed"})
+
+        # Subscriber must NOT be dropped from manager.subscribers
+        self.assertIn(q, manager.subscribers)
+
+        # Drain queue and verify completed event reached the queue
+        events = []
+        while not q.empty():
+            events.append(q.get_nowait())
+
+        completed_events = [e for e in events if "event: completed" in e or "completed" in e]
+        self.assertTrue(len(completed_events) > 0)
+
 
 class TestExportConversion(unittest.TestCase):
     def test_normalize_format_aliases(self):
