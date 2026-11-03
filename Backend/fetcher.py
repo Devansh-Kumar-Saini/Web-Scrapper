@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
+from requests.adapters import HTTPAdapter
 
 try:
     from curl_cffi import requests as cffi_requests
@@ -124,6 +125,11 @@ class Fetcher:
         else:
             self.session = requests.Session()
             self.is_curl_cffi = False
+
+        if not self.is_curl_cffi and hasattr(self.session, "mount"):
+            adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=1)
+            self.session.mount("https://", adapter)
+            self.session.mount("http://", adapter)
 
         if self.proxy:
             self.session.proxies = {"http": self.proxy, "https": self.proxy}

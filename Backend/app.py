@@ -897,7 +897,7 @@ def api_scrape_start() -> Any:
         return jsonify({"error": "chunk_overlap cannot be negative."}), 400
 
     respect_robots = _as_bool(data.get("respect_robots"), True)
-    concurrency = _as_int(data.get("concurrency", 5), 5)
+    concurrency = max(1, min(100, _as_int(data.get("concurrency", 10), 10)))
     try:
         delay = float(data.get("delay", REQUEST_DELAY_SECONDS))
         if delay < 0:

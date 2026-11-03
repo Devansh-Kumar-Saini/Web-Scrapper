@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -51,6 +53,38 @@ def _root_domain(url: str) -> str:
 def _is_html_candidate(url: str) -> bool:
     suffix = PurePosixPath(urlparse(url).path.lower()).suffix
     return suffix not in SKIPPED_EXTENSIONS
+
+
+_RE_HREF = re.compile(
+    r'<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+    re.IGNORECASE,
+)
+_RE_TITLE = re.compile(r'<title\b[^>]*>(.*?)</title>', re.IGNORECASE | re.DOTALL)
+
+
+def _extract_title_fast(html_content: str) -> str:
+    m = _RE_TITLE.search(html_content)
+    if m:
+        cleaned = html_lib.unescape(m.group(1)).strip()
+        if cleaned:
+            # Clean up whitespace/newlines within title
+            return " ".join(cleaned.split())
+    return "Untitled page"
+
+
+def _extract_hrefs_fast(html_content: str) -> list[str]:
+    hrefs: list[str] = []
+    for m in _RE_HREF.finditer(html_content):
+        val = m.group(1) or m.group(2) or m.group(3)
+        if val:
+            cleaned = html_lib.unescape(val.strip().strip("'\"\\"))
+            if (
+                cleaned
+                and not cleaned.startswith(("#", "javascript:", "mailto:", "tel:", "data:", "${"))
+                and "${" not in cleaned
+            ):
+                hrefs.append(cleaned)
+    return hrefs
 
 
 class Crawler:
@@ -176,25 +210,23 @@ class Crawler:
 
             final_url = normalize_url(result.final_url)
             html = result.html
-            soup = BeautifulSoup(html, "lxml")
-            if self.render_js or len(soup.get_text(" ", strip=True)) < 20:
+            if self.render_js:
                 with self._render_lock:
                     rendered_html = self._render(final_url)
                 if rendered_html:
                     html = rendered_html
-                    soup = BeautifulSoup(html, "lxml")
-            title = soup.title
-            page = Page(final_url, depth, title.get_text(" ", strip=True) if title else "Untitled page", html)
+            title = _extract_title_fast(html)
+            page = Page(final_url, depth, title, html)
             if self.on_page_crawled:
                 self.on_page_crawled(page)
             yield page
 
             if depth >= self.max_depth:
                 continue
-            for link in soup.find_all("a", href=True):
+            for raw_href in _extract_hrefs_fast(html):
                 if self.stop_event and self.stop_event.is_set():
                     break
-                candidate = normalize_url(urljoin(final_url, link["href"]))
+                candidate = normalize_url(urljoin(final_url, raw_href))
                 parsed = urlparse(candidate)
                 if parsed.scheme not in {"http", "https"} or not _is_html_candidate(candidate):
                     continue
@@ -253,22 +285,20 @@ class Crawler:
 
             final_url = normalize_url(result.final_url)
             html = result.html
-            soup = BeautifulSoup(html, "lxml")
-            if self.render_js or len(soup.get_text(" ", strip=True)) < 20:
+            if self.render_js:
                 with self._render_lock:
                     rendered_html = self._render(final_url)
                 if rendered_html:
                     html = rendered_html
-                    soup = BeautifulSoup(html, "lxml")
-            title = soup.title
-            page = Page(final_url, depth, title.get_text(" ", strip=True) if title else "Untitled page", html)
+            title = _extract_title_fast(html)
+            page = Page(final_url, depth, title, html)
 
             discovered: list[str] = []
             if depth < self.max_depth:
-                for link in soup.find_all("a", href=True):
+                for raw_href in _extract_hrefs_fast(html):
                     if self.stop_event and self.stop_event.is_set():
                         break
-                    candidate = normalize_url(urljoin(final_url, link["href"]))
+                    candidate = normalize_url(urljoin(final_url, raw_href))
                     parsed = urlparse(candidate)
                     if parsed.scheme not in {"http", "https"} or not _is_html_candidate(candidate):
                         continue
@@ -302,26 +332,24 @@ class Crawler:
 
                 done, _ = concurrent.futures.wait(
                     current_active,
-                    timeout=0.1,
+                    timeout=0.05,
                     return_when=concurrent.futures.FIRST_COMPLETED,
                 )
 
-                for fut in done:
-                    with state_lock:
+                pages_to_yield: list[Page] = []
+                with state_lock:
+                    for fut in done:
                         active_futures.discard(fut)
-                    try:
-                        page, discovered = fut.result()
-                    except Exception as exc:
-                        self.logger.warning("Worker task error: %s", exc)
-                        page, discovered = None, []
+                        try:
+                            page, discovered = fut.result()
+                        except Exception as exc:
+                            self.logger.warning("Worker task error: %s", exc)
+                            page, discovered = None, []
 
-                    if page is not None:
-                        if self.on_page_crawled:
-                            self.on_page_crawled(page)
-                        yield page
+                        if page is not None:
+                            pages_to_yield.append(page)
 
-                    if discovered and not (self.stop_event and self.stop_event.is_set()):
-                        with state_lock:
+                        if discovered and not (self.stop_event and self.stop_event.is_set()):
                             for candidate in discovered:
                                 if candidate in seen:
                                     continue
@@ -335,5 +363,9 @@ class Crawler:
                                     nonlocal_queued += 1
                                     frontier.append((candidate, (page.depth + 1 if page else 1), _root_domain(candidate)))
 
-                    with state_lock:
-                        schedule_workers()
+                    schedule_workers()
+
+                for page in pages_to_yield:
+                    if self.on_page_crawled:
+                        self.on_page_crawled(page)
+                    yield page

@@ -605,9 +605,9 @@
     document.querySelectorAll(".preset-pill[data-pages]").forEach((p) => {
       p.classList.toggle("active", p.getAttribute("data-pages") === "100");
     });
-    if (concurrencyInput) concurrencyInput.value = 5;
+    if (concurrencyInput) concurrencyInput.value = 10;
     document.querySelectorAll(".preset-pill[data-concurrency]").forEach((p) => {
-      p.classList.toggle("active", p.getAttribute("data-concurrency") === "5");
+      p.classList.toggle("active", p.getAttribute("data-concurrency") === "10");
     });
     if (delayInput) delayInput.value = 0.2;
     document.querySelectorAll(".preset-pill[data-delay]").forEach((p) => {

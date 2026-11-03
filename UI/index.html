@@ -379,14 +379,15 @@
                         <label for="concurrencyInput" class="input-label">Concurrent Workers</label>
                       </div>
                       <div class="pill-input-row">
-                        <input type="number" id="concurrencyInput" class="custom-input" min="1" max="20" value="5" required aria-required="true" />
+                        <input type="number" id="concurrencyInput" class="custom-input" min="1" max="100" value="10" required aria-required="true" />
                         <div class="pill-group" role="group" aria-label="Worker concurrency presets">
-                          <button type="button" class="preset-pill" data-concurrency="1">1</button>
-                          <button type="button" class="preset-pill" data-concurrency="3">3</button>
-                          <button type="button" class="preset-pill active" data-concurrency="5">5</button>
-                          <button type="button" class="preset-pill" data-concurrency="10">10</button>
+                          <button type="button" class="preset-pill" data-concurrency="5">5</button>
+                          <button type="button" class="preset-pill active" data-concurrency="10">10</button>
+                          <button type="button" class="preset-pill" data-concurrency="25">25</button>
+                          <button type="button" class="preset-pill" data-concurrency="50">50</button>
                         </div>
                       </div>
+                      <p class="input-desc">Number of parallel requests (1–100). Higher values maximize throughput on fast connections.</p>
                     </div>
 
                     <!-- Request Delay -->
