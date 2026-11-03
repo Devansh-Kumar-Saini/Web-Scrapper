@@ -109,36 +109,50 @@ class Fetcher:
         self.impersonate = impersonate
         self.proxy = proxy
         self.rotate_user_agent = rotate_user_agent
-
-        if session is not None:
-            self.session = session
-            self.is_curl_cffi = False
-        elif impersonate and HAS_CURL_CFFI:
-            target_imp = "chrome" if impersonate is True else str(impersonate)
-            try:
-                self.session = cffi_requests.Session(impersonate=target_imp)
-                self.is_curl_cffi = True
-            except Exception as exc:
-                self.logger.warning("Failed to initialize curl_cffi with impersonate='%s': %s", target_imp, exc)
-                self.session = requests.Session()
-                self.is_curl_cffi = False
-        else:
-            self.session = requests.Session()
-            self.is_curl_cffi = False
-
-        if not self.is_curl_cffi and hasattr(self.session, "mount"):
-            adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=1)
-            self.session.mount("https://", adapter)
-            self.session.mount("http://", adapter)
-
-        if self.proxy:
-            self.session.proxies = {"http": self.proxy, "https": self.proxy}
-
-        self.session.headers.update(DEFAULT_BROWSER_HEADERS)
-        self.session.headers["User-Agent"] = self.user_agent
+        self._custom_session = session
+        self._thread_local = threading.local()
+        self.is_curl_cffi = bool(impersonate and HAS_CURL_CFFI)
         self._robots: dict[str, RobotFileParser] = {}
         self._last_request: dict[str, float] = {}
         self._lock = threading.Lock()
+
+    @property
+    def session(self) -> Any:
+        return self._get_session()
+
+    def _get_session(self) -> Any:
+        if self._custom_session is not None:
+            return self._custom_session
+
+        sess = getattr(self._thread_local, "session", None)
+        if sess is not None:
+            return sess
+
+        if self.impersonate and HAS_CURL_CFFI:
+            target_imp = "chrome" if self.impersonate is True else str(self.impersonate)
+            try:
+                sess = cffi_requests.Session(impersonate=target_imp)
+            except Exception as exc:
+                self.logger.warning("Failed to initialize curl_cffi with impersonate='%s': %s", target_imp, exc)
+                sess = requests.Session()
+                if hasattr(sess, "mount"):
+                    adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+                    sess.mount("https://", adapter)
+                    sess.mount("http://", adapter)
+        else:
+            sess = requests.Session()
+            if hasattr(sess, "mount"):
+                adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+                sess.mount("https://", adapter)
+                sess.mount("http://", adapter)
+
+        if self.proxy:
+            sess.proxies = {"http": self.proxy, "https": self.proxy}
+
+        sess.headers.update(DEFAULT_BROWSER_HEADERS)
+        sess.headers["User-Agent"] = self.user_agent
+        self._thread_local.session = sess
+        return sess
 
     # --- robots.txt ---
 
@@ -149,22 +163,22 @@ class Fetcher:
             if origin in self._robots:
                 return self._robots[origin]
 
-        parser = RobotFileParser()
-        parser.set_url(f"{origin}/robots.txt")
-        try:
-            response = self.session.get(f"{origin}/robots.txt", timeout=REQUEST_TIMEOUT, allow_redirects=True)
-            if response.status_code >= 400:
+            parser = RobotFileParser()
+            parser.set_url(f"{origin}/robots.txt")
+            session = self._get_session()
+            try:
+                response = session.get(f"{origin}/robots.txt", timeout=REQUEST_TIMEOUT, allow_redirects=True)
+                if response.status_code >= 400:
+                    parser.parse([])
+                else:
+                    parser.parse(response.text.splitlines())
+            except Exception as exc:
+                # An unreachable robots.txt means "no restrictions".
+                self.logger.warning("Could not read robots.txt for %s: %s", origin, exc)
                 parser.parse([])
-            else:
-                parser.parse(response.text.splitlines())
-        except Exception as exc:
-            # An unreachable robots.txt means "no restrictions".
-            self.logger.warning("Could not read robots.txt for %s: %s", origin, exc)
-            parser.parse([])
 
-        with self._lock:
             self._robots[origin] = parser
-        return parser
+            return parser
 
     def can_fetch(self, url: str) -> bool:
         if not self.respect_robots:
@@ -250,6 +264,10 @@ class Fetcher:
 
     def close(self) -> None:
         try:
-            self.session.close()
+            if self._custom_session is not None and hasattr(self._custom_session, "close"):
+                self._custom_session.close()
+            local_sess = getattr(self._thread_local, "session", None)
+            if local_sess is not None and hasattr(local_sess, "close"):
+                local_sess.close()
         except Exception:
             pass

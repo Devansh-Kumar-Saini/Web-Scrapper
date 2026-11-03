@@ -34,6 +34,7 @@ class Page:
     depth: int
     title: str
     html: str
+    extracted_document: Any = None
 
 
 def normalize_url(url: str) -> str:
@@ -108,6 +109,7 @@ class Crawler:
         impersonate: str | bool | None = None,
         proxy: str | None = None,
         render_js: bool = False,
+        page_processor: Callable[[str, str, int], Any] | None = None,
     ) -> None:
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -121,6 +123,7 @@ class Crawler:
         self.sitemap = sitemap
         self.sitemap_url = sitemap_url
         self.render_js = bool(render_js)
+        self.page_processor = page_processor
         self._owns_fetcher = fetcher is None
         self.fetcher = fetcher or Fetcher(
             logger=logger,
@@ -216,7 +219,15 @@ class Crawler:
                 if rendered_html:
                     html = rendered_html
             title = _extract_title_fast(html)
-            page = Page(final_url, depth, title, html)
+
+            extracted_doc = None
+            if self.page_processor is not None:
+                try:
+                    extracted_doc = self.page_processor(final_url, html, depth)
+                except Exception as proc_exc:
+                    self.logger.warning("Extraction error for %s: %s", final_url, proc_exc)
+
+            page = Page(final_url, depth, title, html, extracted_document=extracted_doc)
             if self.on_page_crawled:
                 self.on_page_crawled(page)
             yield page
@@ -291,7 +302,15 @@ class Crawler:
                 if rendered_html:
                     html = rendered_html
             title = _extract_title_fast(html)
-            page = Page(final_url, depth, title, html)
+
+            extracted_doc = None
+            if self.page_processor is not None:
+                try:
+                    extracted_doc = self.page_processor(final_url, html, depth)
+                except Exception as proc_exc:
+                    self.logger.warning("Extraction error for %s: %s", final_url, proc_exc)
+
+            page = Page(final_url, depth, title, html, extracted_document=extracted_doc)
 
             discovered: list[str] = []
             if depth < self.max_depth:

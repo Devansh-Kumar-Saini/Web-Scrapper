@@ -192,6 +192,36 @@ class TestConcurrentCrawler(unittest.TestCase):
             urls = {p.url for p in pages}
             self.assertIn("https://example.com/sitemap-p1", urls)
 
+    def test_crawler_with_page_processor_parallel_pipeline(self):
+        logger = logging.getLogger("test_crawler")
+        fetcher = MagicMock()
+        fetcher.session = MagicMock()
+        fetcher.fetch.return_value = FetchResult(
+            requested_url="https://example.com/test",
+            final_url="https://example.com/test",
+            html="<html><head><title>Test Page</title></head><body><h1>Content</h1></body></html>",
+            status_code=200,
+            content_type="text/html",
+        )
+
+        def mock_processor(url: str, html: str, depth: int):
+            return {"processed_url": url, "has_content": True}
+
+        crawler = Crawler(
+            max_depth=0,
+            max_pages=1,
+            same_domain=True,
+            logger=logger,
+            concurrency=1,
+            fetcher=fetcher,
+            page_processor=mock_processor,
+        )
+        pages = list(crawler.crawl(["https://example.com/test"]))
+        self.assertEqual(len(pages), 1)
+        self.assertIsNotNone(pages[0].extracted_document)
+        self.assertEqual(pages[0].extracted_document["processed_url"], "https://example.com/test")
+        self.assertTrue(pages[0].extracted_document["has_content"])
+
 
 class TestCLIPipeAndDryRun(unittest.TestCase):
     @patch("Backend.cli.Crawler")

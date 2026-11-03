@@ -170,7 +170,9 @@ def _find_root(soup: BeautifulSoup, target_selector: str | None) -> tuple[Tag, b
 
     root = soup.find(["article", "main"])
     if root is None:
-        candidates = soup.find_all("div")
+        all_divs = soup.find_all("div")
+        meaningful = [d for d in all_divs if d.find("p") or d.find(["h1", "h2", "h3"])]
+        candidates = meaningful if meaningful else all_divs
         root = max(candidates, key=_text_score, default=None)
     if root is None:
         root = soup.body or soup

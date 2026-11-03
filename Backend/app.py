@@ -273,6 +273,25 @@ class JobManager:
             data["elapsed_seconds"] = round(elapsed, 2)
             return data
 
+    def get_stats(self) -> dict[str, Any]:
+        with self.lock:
+            elapsed = 0.0
+            if self.state.started_at:
+                if self.state.finished_at:
+                    elapsed = self.state.finished_at - self.state.started_at
+                else:
+                    elapsed = time.monotonic() - self.state.started_at
+            return {
+                "status": self.state.status,
+                "pages_crawled": self.state.pages_crawled,
+                "pages_saved": self.state.pages_saved,
+                "pages_skipped": self.state.pages_skipped,
+                "elapsed_seconds": round(elapsed, 2),
+                "current_url": self.state.current_url,
+                "current_depth": self.state.current_depth,
+                "dry_run": self.state.dry_run,
+            }
+
     def reset(self) -> None:
         with self.lock:
             if self.state.status == "running":
@@ -529,6 +548,16 @@ class JobManager:
         if webhook_url:
             self.log("INFO", f"Webhook callback configured: {webhook_url}")
 
+        def _extract_page(page_url: str, page_html: str, page_depth: int) -> Any:
+            return extract_structured(
+                page_html,
+                url=page_url,
+                target_selector=target_selector or None,
+                exclude_selectors=exclude_selectors,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+
         writer = OutputWriter(str(out_path), output_format=output_format)
         crawler = Crawler(
             max_depth=depth,
@@ -546,6 +575,7 @@ class JobManager:
             impersonate=impersonate,
             proxy=proxy,
             render_js=render_js,
+            page_processor=_extract_page if not dry_run else None,
         )
 
         try:
@@ -565,7 +595,7 @@ class JobManager:
                             self.state.discovered_urls = list(discovered_targets)
 
                         self.log("INFO", f"[depth {page.depth}] Discovered {page.url}")
-                        self.broadcast("stats", self.get_snapshot())
+                        self.broadcast("stats", self.get_stats())
                 except Exception as exc:
                     self.log("WARN", f"Crawl discovery encountered error: {exc}")
 
@@ -618,19 +648,21 @@ class JobManager:
                         self.state.current_depth = page.depth
                         self.state.pages_crawled += 1
 
-                    try:
-                        document = extract_structured(
-                            page.html,
-                            url=page.url,
-                            target_selector=target_selector or None,
-                            exclude_selectors=exclude_selectors,
-                            chunk_size=chunk_size,
-                            chunk_overlap=chunk_overlap,
-                        )
-                    except Exception as exc:
-                        crawler.skipped_reasons.append(f"extraction failure: {page.url}")
-                        self.log("WARN", f"Extraction failed for {page.url}: {exc}")
-                        continue
+                    document = getattr(page, "extracted_document", None)
+                    if document is None:
+                        try:
+                            document = extract_structured(
+                                page.html,
+                                url=page.url,
+                                target_selector=target_selector or None,
+                                exclude_selectors=exclude_selectors,
+                                chunk_size=chunk_size,
+                                chunk_overlap=chunk_overlap,
+                            )
+                        except Exception as exc:
+                            crawler.skipped_reasons.append(f"extraction failure: {page.url}")
+                            self.log("WARN", f"Extraction failed for {page.url}: {exc}")
+                            continue
 
                     filename = writer.save_document(document, page.depth)
                     title = document.title
@@ -654,7 +686,7 @@ class JobManager:
 
                     self.log("INFO", f"[depth {page.depth}] Saved {page.url} -> {filename} ({file_size} bytes)")
                     self.broadcast("page_saved", page_info)
-                    self.broadcast("stats", self.get_snapshot())
+                    self.broadcast("stats", self.get_stats())
             finally:
                 writer.finalize()
 
