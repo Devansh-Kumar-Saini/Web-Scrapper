@@ -29,6 +29,7 @@
     latestCrawled: 0,
     sessionAvgRate: 0,
     peakRate: 0,
+    catalogRenderLimit: 100,
   };
 
   // --- DOM Element References ---
@@ -828,6 +829,7 @@
       startVelocitySampling();
       startStatusPolling();
     } else {
+      const wasRunning = state.isRunning;
       state.isRunning = false;
       stopStatusPolling();
       globalStartBtn.disabled = false;
@@ -847,21 +849,23 @@
         monitorDepthTag.textContent = "Finished";
         if (isDryRun) {
           monitorUrlText.textContent = "Dry run complete. Discovered URLs listed in logs.";
-          showToast("Dry run completed successfully!", "success");
+          if (wasRunning) showToast("Dry run completed successfully!", "success");
         } else {
           monitorUrlText.textContent = "All pages crawled and saved to output folder.";
-          showToast("Crawl finished successfully!", "success");
-          fetchSavedPages();
-          fetchOutputDirectory();
+          if (wasRunning) {
+            showToast("Crawl finished successfully!", "success");
+            fetchSavedPages();
+            fetchOutputDirectory();
+          }
         }
       } else if (status === "stopped") {
         monitorDepthTag.textContent = "Stopped";
         monitorUrlText.textContent = isDryRun ? "Dry run stopped by user." : "Crawl stopped by user.";
-        showToast(isDryRun ? "Dry run stopped" : "Crawl stopped", "info");
+        if (wasRunning) showToast(isDryRun ? "Dry run stopped" : "Crawl stopped", "info");
       } else if (status === "failed") {
         monitorDepthTag.textContent = "Error";
         monitorUrlText.textContent = errorMsg || "Crawl ended due to an error.";
-        showToast(errorMsg || "Crawl job failed", "error");
+        if (wasRunning) showToast(errorMsg || "Crawl job failed", "error");
       }
     }
   }
@@ -1045,14 +1049,18 @@
 
     if (snap.logs && Array.isArray(snap.logs) && state.allLogs.length === 0) {
       for (const log of snap.logs) {
-        appendLogEntry(log);
+        state.allLogs.push(log);
       }
+      if (state.allLogs.length > 600) {
+        state.allLogs = state.allLogs.slice(-600);
+      }
+      if (navLogBadge) navLogBadge.textContent = state.allLogs.length;
+      if (terminalCounter) terminalCounter.textContent = `${state.allLogs.length} logs`;
+      rebuildConsoleLogs();
     }
 
-    if (snap.recent_pages && Array.isArray(snap.recent_pages)) {
-      for (const p of snap.recent_pages) {
-        addSavedPage(p);
-      }
+    if (snap.recent_pages && Array.isArray(snap.recent_pages) && snap.recent_pages.length > 0) {
+      addSavedPagesBatch(snap.recent_pages);
     }
 
     updateStatus(snap.status || "idle", snap.error_message, Boolean(snap.dry_run));
@@ -1091,19 +1099,31 @@
   // =========================================================================
   // Live Streaming Terminal Console
   // =========================================================================
+  let consoleScrollPending = false;
+  function requestConsoleScroll() {
+    if (consoleScrollPending || !terminalAutoScroll || !terminalAutoScroll.checked) return;
+    consoleScrollPending = true;
+    requestAnimationFrame(() => {
+      consoleScrollPending = false;
+      if (terminalConsole) {
+        terminalConsole.scrollTop = terminalConsole.scrollHeight;
+      }
+    });
+  }
+
   function appendLogEntry(entry) {
     state.allLogs.push(entry);
     if (state.allLogs.length > 600) state.allLogs.shift();
 
-    navLogBadge.textContent = state.allLogs.length;
-    terminalCounter.textContent = `${state.allLogs.length} logs`;
+    if (navLogBadge) navLogBadge.textContent = state.allLogs.length;
+    if (terminalCounter) terminalCounter.textContent = `${state.allLogs.length} logs`;
 
     if (state.currentLogFilter === "ALL" || entry.level === state.currentLogFilter) {
       renderLogDOM(entry);
     }
   }
 
-  function renderLogDOM(entry) {
+  function createLogRowElement(entry) {
     const row = document.createElement("div");
     const lvl = (entry.level || "INFO").toLowerCase();
     row.className = `log-row log-${lvl}`;
@@ -1123,11 +1143,19 @@
     row.appendChild(ts);
     row.appendChild(tag);
     row.appendChild(content);
+    return row;
+  }
+
+  function renderLogDOM(entry) {
+    if (!terminalConsole) return;
+    const row = createLogRowElement(entry);
     terminalConsole.appendChild(row);
 
-    if (terminalAutoScroll.checked) {
-      terminalConsole.scrollTop = terminalConsole.scrollHeight;
+    while (terminalConsole.children.length > 400) {
+      terminalConsole.removeChild(terminalConsole.firstChild);
     }
+
+    requestConsoleScroll();
   }
 
   levelPills.forEach((pill) => {
@@ -1140,12 +1168,18 @@
   });
 
   function rebuildConsoleLogs() {
+    if (!terminalConsole) return;
     terminalConsole.innerHTML = "";
-    for (const entry of state.allLogs) {
-      if (state.currentLogFilter === "ALL" || entry.level === state.currentLogFilter) {
-        renderLogDOM(entry);
-      }
+    const fragment = document.createDocumentFragment();
+    const relevantLogs = state.allLogs.filter(
+      (e) => state.currentLogFilter === "ALL" || e.level === state.currentLogFilter
+    );
+    const visibleLogs = relevantLogs.slice(-400);
+    for (const entry of visibleLogs) {
+      fragment.appendChild(createLogRowElement(entry));
     }
+    terminalConsole.appendChild(fragment);
+    requestConsoleScroll();
   }
 
   terminalClearBtn.addEventListener("click", () => {
@@ -1371,37 +1405,88 @@
   });
 
   // =========================================================================
-  // Saved Pages Catalog
+  // Saved Pages Catalog & Results Data Fetching
   // =========================================================================
+  let activeResultsPromise = null;
+  async function fetchResultsData(outDir) {
+    if (activeResultsPromise) return activeResultsPromise;
+    activeResultsPromise = (async () => {
+      try {
+        const resp = await fetch(`/api/results?output_dir=${encodeURIComponent(outDir)}`);
+        if (!resp.ok) return null;
+        return await resp.json();
+      } catch (err) {
+        console.warn("Failed to fetch results:", err);
+        return null;
+      } finally {
+        setTimeout(() => {
+          activeResultsPromise = null;
+        }, 300);
+      }
+    })();
+    return activeResultsPromise;
+  }
+
+  let catalogRenderTimer = null;
+  function scheduleCatalogRender() {
+    if (catalogRenderTimer) return;
+    catalogRenderTimer = requestAnimationFrame(() => {
+      catalogRenderTimer = null;
+      renderCatalogTable();
+    });
+  }
+
+  function addSavedPagesBatch(pages) {
+    if (!pages || !pages.length) return;
+    const existingMap = new Map();
+    state.savedPages.forEach((p, idx) => {
+      if (p.file) existingMap.set(p.file, idx);
+    });
+
+    let modified = false;
+    for (const p of pages) {
+      if (!p || !p.file) continue;
+      if (existingMap.has(p.file)) {
+        state.savedPages[existingMap.get(p.file)] = p;
+      } else {
+        state.savedPages.unshift(p);
+        existingMap.set(p.file, 0);
+      }
+      modified = true;
+    }
+
+    if (modified) {
+      if (navPageBadge) navPageBadge.textContent = state.savedPages.length;
+      scheduleCatalogRender();
+    }
+  }
+
   function addSavedPage(page) {
+    if (!page || !page.file) return;
     const existing = state.savedPages.findIndex((p) => p.file === page.file);
     if (existing >= 0) {
       state.savedPages[existing] = page;
     } else {
       state.savedPages.unshift(page);
     }
-    navPageBadge.textContent = state.savedPages.length;
-    renderCatalogTable();
+    if (navPageBadge) navPageBadge.textContent = state.savedPages.length;
+    scheduleCatalogRender();
   }
 
   async function fetchSavedPages() {
     const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
-    try {
-      const resp = await fetch(`/api/results?output_dir=${encodeURIComponent(outDir)}`);
-      if (!resp.ok) return;
-      const data = await resp.json();
-      if (data.pages && Array.isArray(data.pages)) {
-        state.savedPages = data.pages;
-        navPageBadge.textContent = state.savedPages.length;
-        renderCatalogTable();
-      }
-    } catch (err) {
-      console.warn("Failed to fetch saved pages:", err);
+    const data = await fetchResultsData(outDir);
+    if (!data) return;
+    if (data.pages && Array.isArray(data.pages)) {
+      state.savedPages = data.pages;
+      if (navPageBadge) navPageBadge.textContent = state.savedPages.length;
+      scheduleCatalogRender();
     }
   }
 
   function renderCatalogTable() {
-    const query = catalogSearchInput.value.trim().toLowerCase();
+    if (!catalogTableBody) return;
+    const query = catalogSearchInput ? catalogSearchInput.value.trim().toLowerCase() : "";
     const filtered = state.savedPages.filter((page) => {
       if (!query) return true;
       return (
@@ -1411,29 +1496,32 @@
       );
     });
 
-    catalogTotalCount.textContent = state.savedPages.length;
-    catalogTableBody.innerHTML = "";
+    if (catalogTotalCount) catalogTotalCount.textContent = state.savedPages.length;
 
     if (filtered.length === 0) {
-      const tr = document.createElement("tr");
-      tr.className = "empty-state-row";
-      tr.innerHTML = `
-        <td colspan="5">
-          <div class="empty-box">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            <h4>${query ? "No documents match your query" : "No pages saved yet"}</h4>
-            <p>${query ? "Try searching for a different keyword or filename." : "Start a crawl job or test an individual URL in the Inspector to see documents here."}</p>
-          </div>
-        </td>
+      catalogTableBody.innerHTML = `
+        <tr class="empty-state-row">
+          <td colspan="5">
+            <div class="empty-box">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              <h4>${query ? "No documents match your query" : "No pages saved yet"}</h4>
+              <p>${query ? "Try searching for a different keyword or filename." : "Start a crawl job or test an individual URL in the Inspector to see documents here."}</p>
+            </div>
+          </td>
+        </tr>
       `;
-      catalogTableBody.appendChild(tr);
       return;
     }
 
-    filtered.forEach((page) => {
+    const fragment = document.createDocumentFragment();
+    const limit = query ? filtered.length : (state.catalogRenderLimit || 100);
+    const displayList = filtered.slice(0, limit);
+
+    for (let i = 0; i < displayList.length; i++) {
+      const page = displayList[i];
       const tr = document.createElement("tr");
       const sizeStr = page.bytes ? `${(page.bytes / 1024).toFixed(1)} KB` : "—";
       const titleStr = escapeHtml(page.title || "Untitled Document");
@@ -1464,16 +1552,29 @@
           </button>
         </td>
       `;
+      fragment.appendChild(tr);
+    }
 
-      tr.querySelector(".preview-btn").addEventListener("click", () => {
-        openPreviewDrawer(page.file, page.url, page.title, page.depth);
-      });
+    if (!query && filtered.length > limit) {
+      const loadMoreTr = document.createElement("tr");
+      loadMoreTr.innerHTML = `
+        <td colspan="5" style="text-align: center; padding: 14px 0;">
+          <button type="button" id="loadMoreCatalogBtn" class="btn btn-secondary btn-sm" style="margin: 0 auto;">
+            Showing ${limit} of ${filtered.length} pages · Load More
+          </button>
+        </td>
+      `;
+      fragment.appendChild(loadMoreTr);
+    }
 
-      catalogTableBody.appendChild(tr);
-    });
+    catalogTableBody.innerHTML = "";
+    catalogTableBody.appendChild(fragment);
   }
 
-  catalogSearchInput.addEventListener("input", renderCatalogTable);
+  catalogSearchInput.addEventListener("input", () => {
+    state.catalogRenderLimit = 100;
+    renderCatalogTable();
+  });
   refreshCatalogBtn.addEventListener("click", () => {
     fetchSavedPages();
     showToast("Catalog refreshed from disk", "info");
@@ -1486,45 +1587,55 @@
     const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
     if (outputFolderLabel) outputFolderLabel.textContent = outDir;
 
-    try {
-      const resp = await fetch(`/api/results?output_dir=${encodeURIComponent(outDir)}`);
-      if (!resp.ok) return;
-      const data = await resp.json();
+    const data = await fetchResultsData(outDir);
+    if (!data) return;
 
-      outputTotalFilesVal.textContent = data.total_pages || 0;
-      outputTotalSizeVal.textContent = `${((data.total_bytes || 0) / 1024).toFixed(1)} KB`;
-      outputManifestVal.textContent = data.has_manifest ? "index.json present" : "No manifest";
+    if (outputTotalFilesVal) outputTotalFilesVal.textContent = data.total_pages || 0;
+    if (outputTotalSizeVal) outputTotalSizeVal.textContent = `${((data.total_bytes || 0) / 1024).toFixed(1)} KB`;
+    if (outputManifestVal) outputManifestVal.textContent = data.has_manifest ? "index.json present" : "No manifest";
 
-      outputFileList.innerHTML = "";
-      if (!data.pages || data.pages.length === 0) {
-        outputFileList.innerHTML = `<p class="empty-hint">No files in directory yet.</p>`;
-        return;
-      }
-
-      data.pages.forEach((page) => {
-        const item = document.createElement("div");
-        item.className = "file-item-row";
-        item.innerHTML = `
-          <div class="file-item-left">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            <span>${escapeHtml(page.file)}</span>
-          </div>
-          <div class="file-item-meta">
-            <span>${((page.bytes || 0) / 1024).toFixed(1)} KB</span>
-            <button type="button" class="btn btn-secondary btn-sm view-file-btn" data-file="${escapeHtml(page.file)}">View</button>
-          </div>
-        `;
-        item.querySelector(".view-file-btn").addEventListener("click", () => {
-          openPreviewDrawer(page.file, page.url, page.title, page.depth);
-        });
-        outputFileList.appendChild(item);
-      });
-    } catch (err) {
-      console.warn("Failed to load output directory:", err);
+    if (!outputFileList) return;
+    if (!data.pages || data.pages.length === 0) {
+      outputFileList.innerHTML = `<p class="empty-hint">No files in directory yet.</p>`;
+      return;
     }
+
+    const fragment = document.createDocumentFragment();
+    const displayCount = Math.min(data.pages.length, 100);
+
+    for (let i = 0; i < displayCount; i++) {
+      const page = data.pages[i];
+      const item = document.createElement("div");
+      item.className = "file-item-row";
+      const fileEsc = escapeHtml(page.file || "");
+      item.innerHTML = `
+        <div class="file-item-left">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span>${fileEsc}</span>
+        </div>
+        <div class="file-item-meta">
+          <span>${((page.bytes || 0) / 1024).toFixed(1)} KB</span>
+          <button type="button" class="btn btn-secondary btn-sm view-file-btn" data-file="${fileEsc}">View</button>
+        </div>
+      `;
+      fragment.appendChild(item);
+    }
+
+    if (data.pages.length > 100) {
+      const note = document.createElement("div");
+      note.className = "file-item-row";
+      note.style.justifyContent = "center";
+      note.style.color = "var(--text-muted)";
+      note.style.fontSize = "12px";
+      note.textContent = `Showing first 100 files of ${data.pages.length} total on disk.`;
+      fragment.appendChild(note);
+    }
+
+    outputFileList.innerHTML = "";
+    outputFileList.appendChild(fragment);
   }
 
   refreshOutputListBtn.addEventListener("click", () => {
@@ -1537,6 +1648,7 @@
     state.savedPages = [];
     state.allLogs = [];
     state.isRunning = false;
+    state.catalogRenderLimit = 100;
     if (state.elapsedTimer) {
       clearInterval(state.elapsedTimer);
       state.elapsedTimer = null;
@@ -1901,6 +2013,51 @@
   }
 
   // =========================================================================
+  // Delegated Table & File List Click Handlers
+  // =========================================================================
+  if (catalogTableBody) {
+    catalogTableBody.addEventListener("click", (e) => {
+      const loadBtn = e.target.closest("#loadMoreCatalogBtn");
+      if (loadBtn) {
+        state.catalogRenderLimit = (state.catalogRenderLimit || 100) + 200;
+        renderCatalogTable();
+        return;
+      }
+      const previewBtn = e.target.closest(".preview-btn");
+      if (!previewBtn) return;
+      const file = previewBtn.dataset.file;
+      const page = state.savedPages.find((p) => p.file === file);
+      if (page) {
+        openPreviewDrawer(page.file, page.url, page.title, page.depth);
+      } else if (file) {
+        openPreviewDrawer(file, "", file, 0);
+      }
+    });
+  }
+
+  if (outputFileList) {
+    outputFileList.addEventListener("click", (e) => {
+      const btn = e.target.closest(".view-file-btn");
+      if (!btn) return;
+      const file = btn.dataset.file;
+      const page = state.savedPages.find((p) => p.file === file);
+      if (page) {
+        openPreviewDrawer(page.file, page.url, page.title, page.depth);
+      } else if (file) {
+        openPreviewDrawer(file, "", file, 0);
+      }
+    });
+  }
+
+  // Synchronize ARIA state on switches
+  [sameDomainInput, respectRobotsInput, inspectorJsToggle, terminalAutoScroll].forEach((toggle) => {
+    if (!toggle) return;
+    toggle.addEventListener("change", () => {
+      toggle.setAttribute("aria-checked", String(toggle.checked));
+    });
+  });
+
+  // =========================================================================
   // App Bootstrapping
   // =========================================================================
   initTheme();
@@ -1916,11 +2073,3 @@
     switchView(initialHash, false);
   }
 })();
-
-  // Synchronize ARIA state on switches
-  [sameDomainInput, respectRobotsInput, inspectorJsToggle, terminalAutoScroll].forEach((toggle) => {
-    if (!toggle) return;
-    toggle.addEventListener("change", () => {
-      toggle.setAttribute("aria-checked", String(toggle.checked));
-    });
-  });

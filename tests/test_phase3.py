@@ -286,6 +286,49 @@ class TestParityOptions(unittest.TestCase):
         completed_events = [e for e in events if "event: completed" in e or "completed" in e]
         self.assertTrue(len(completed_events) > 0)
 
+    @patch("Backend.app.Crawler")
+    def test_job_worker_broadcasts_completion_once_and_api_results_serves_data(self, mock_crawler_cls):
+        mock_inst = MagicMock()
+        mock_inst.skipped_reasons = []
+        mock_inst.crawl.return_value = []
+        mock_crawler_cls.return_value = mock_inst
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a mock index.json manifest
+            sample_pages = [
+                {"file": f"page_{i}.md", "url": f"https://example.com/{i}", "title": f"Page {i}", "depth": 0, "bytes": 1024}
+                for i in range(150)
+            ]
+            manifest_path = Path(temp_dir) / "index.json"
+            manifest_path.write_text(json.dumps(sample_pages), encoding="utf-8")
+
+            client = app.test_client()
+            resp = client.get(f"/api/results?output_dir={temp_dir}")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertEqual(data["total_pages"], 150)
+            self.assertTrue(data["has_manifest"])
+            self.assertEqual(len(data["pages"]), 150)
+            self.assertEqual(data["total_bytes"], 150 * 1024)
+
+            # Test single clean broadcast on crawl run
+            manager = JobManager()
+            q = manager.subscribe()
+            manager._run_crawler_worker(
+                urls=["https://example.com"],
+                output_format="md",
+                depth=1,
+                max_pages=1,
+                same_domain=True,
+                output_dir_str=temp_dir,
+                dry_run=False,
+            )
+            events = []
+            while not q.empty():
+                events.append(q.get_nowait())
+            completed_events = [e for e in events if "event: completed" in e]
+            self.assertEqual(len(completed_events), 1)
+
 
 class TestExportConversion(unittest.TestCase):
     def test_normalize_format_aliases(self):

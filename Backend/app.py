@@ -606,10 +606,6 @@ class JobManager:
                     "crawl.stopped" if stopped else "crawl.completed",
                     "stopped" if stopped else "completed",
                 )
-                snap = self.get_snapshot()
-                self.broadcast("stats", snap)
-                self.broadcast("status", snap)
-                self.broadcast("completed", snap)
                 return
 
             try:
@@ -679,10 +675,6 @@ class JobManager:
                 "crawl.stopped" if stopped else "crawl.completed",
                 "stopped" if stopped else "completed",
             )
-            snap = self.get_snapshot()
-            self.broadcast("stats", snap)
-            self.broadcast("status", snap)
-            self.broadcast("completed", snap)
         except Exception as exc:
             logger.exception("Crawl encountered an unhandled exception")
             with self.lock:
