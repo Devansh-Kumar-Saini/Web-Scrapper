@@ -506,7 +506,8 @@
 
       if (data.is_cloud) {
         showToast(data.message, "warn", 4500);
-        if (outputDirInput) outputDirInput.value = data.path || "./output";
+        if (outputDirInput) outputDirInput.value = "";
+        if (sidebarOutputLabel) sidebarOutputLabel.textContent = "No folder selected";
         return;
       }
 
@@ -620,7 +621,8 @@
     if (sitemapUrlInput) sitemapUrlInput.value = "";
     if (renderJsInput) renderJsInput.checked = false;
     if (dryRunInput) dryRunInput.checked = false;
-    if (outputDirInput) outputDirInput.value = "./output";
+    if (outputDirInput) outputDirInput.value = "";
+    if (sidebarOutputLabel) sidebarOutputLabel.textContent = "No folder selected";
     if (webhookUrlInput) webhookUrlInput.value = "";
     selectorInput.value = "";
     excludeSelectorInput.value = "";
@@ -661,7 +663,13 @@
     const maxPages = parseInt(maxPagesInput.value, 10);
     const sameDomain = sameDomainInput.checked;
     const respectRobots = respectRobotsInput.checked;
-    const outputDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outputDir = getSelectedOutputDir();
+    if (!outputDir) {
+      showToast("Choose a folder with Browse before starting the crawl.", "warn");
+      switchView("viewCrawlSetup");
+      browseDirBtn.focus();
+      return;
+    }
     const format = formatInput.value || "md";
     const targetSelector = selectorInput.value.trim();
     const excludeSelectors = excludeSelectorInput.value.trim();
@@ -1427,6 +1435,10 @@
     return activeResultsPromise;
   }
 
+  function getSelectedOutputDir() {
+    return outputDirInput ? outputDirInput.value.trim() : "";
+  }
+
   let catalogRenderTimer = null;
   function scheduleCatalogRender() {
     if (catalogRenderTimer) return;
@@ -1474,7 +1486,8 @@
   }
 
   async function fetchSavedPages() {
-    const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outDir = getSelectedOutputDir();
+    if (!outDir) return;
     const data = await fetchResultsData(outDir);
     if (!data) return;
     if (data.pages && Array.isArray(data.pages)) {
@@ -1584,7 +1597,12 @@
   // Output Storage & Export
   // =========================================================================
   async function fetchOutputDirectory() {
-    const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outDir = getSelectedOutputDir();
+    if (!outDir) {
+      if (outputFolderLabel) outputFolderLabel.textContent = "No folder selected";
+      if (outputFileList) outputFileList.innerHTML = '<p class="empty-hint">Choose a folder in Crawl Setup to view saved files.</p>';
+      return;
+    }
     if (outputFolderLabel) outputFolderLabel.textContent = outDir;
 
     const data = await fetchResultsData(outDir);
@@ -1727,7 +1745,11 @@
       return;
     }
 
-    const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outDir = getSelectedOutputDir();
+    if (!outDir) {
+      showToast("Choose a folder with Browse before downloading files.", "warn");
+      return;
+    }
     const totalFiles = parseInt(outputTotalFilesVal ? outputTotalFilesVal.textContent : "0", 10) || 0;
     if (state.savedPages.length === 0 && totalFiles === 0) {
       showToast("No files found in output directory to download.", "warn");
@@ -1816,7 +1838,11 @@
     const confirmed = confirm("Are you sure you want to delete all scraped files in the output directory?");
     if (!confirmed) return;
 
-    const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outDir = getSelectedOutputDir();
+    if (!outDir) {
+      showToast("Choose a folder with Browse before clearing files.", "warn");
+      return;
+    }
     try {
       const resp = await fetch("/api/results/clear", {
         method: "POST",
@@ -1838,7 +1864,11 @@
 
   async function openPreviewDrawer(filename, pageUrl = "", title = "", depth = 0) {
     lastFocusedDrawerElement = document.activeElement;
-    const outDir = (outputDirInput ? outputDirInput.value.trim() : "") || "./output";
+    const outDir = getSelectedOutputDir();
+    if (!outDir) {
+      showToast("Choose a folder with Browse to open saved files.", "warn");
+      return;
+    }
 
     drawerFileName.textContent = filename;
     drawerTitle.textContent = title || filename;
