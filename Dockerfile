@@ -30,8 +30,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Chromium plus all the OS libraries it needs for JavaScript rendering.
-# Keep the apt lists cleanup in the same layer to reduce image size.
-RUN playwright install --with-deps chromium \
+# --only-shell installs just the headless browser (the app never opens a visible
+# window), saving ~400 MB over the full Chromium build.
+RUN playwright install --with-deps --only-shell chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the application code (see .dockerignore for what is excluded).

@@ -3,8 +3,9 @@
 This guide covers running Website Scraper in Docker and publishing your own free,
 public image that anyone can download.
 
-The image contains Python, all Python dependencies, and a full Chromium browser
-for JavaScript rendering, so users do not have to install anything except Docker.
+The image contains Python, all Python dependencies, and a headless Chromium
+browser for JavaScript rendering, so users do not have to install anything
+except Docker.
 
 ---
 
