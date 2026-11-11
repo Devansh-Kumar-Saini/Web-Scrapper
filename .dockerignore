@@ -12,9 +12,10 @@ __pycache__
 *.py[cod]
 .DS_Store
 
-# Local scraped data and design assets
+# Local scraped data, docs, and assets
 output
 Design
+docs
 Screenshots
 
 # Tests and docs that are not needed at runtime

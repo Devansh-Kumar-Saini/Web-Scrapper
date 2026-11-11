@@ -129,12 +129,13 @@ class TestOutputDirectory(unittest.TestCase):
         data = resp.get_json()
         self.assertEqual(data.get("error"), "Something failed")
 
-    @patch.dict("os.environ", {"RENDER": "true"})
-    def test_api_pick_folder_cloud_environment(self):
+    @patch.dict("os.environ", {"SCRAPER_CONTAINER": "1"})
+    def test_api_pick_folder_container_environment(self):
         resp = self.client.post("/api/system/pick-folder")
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data.get("is_cloud"))
+        self.assertTrue(data.get("container"))
         self.assertEqual(data.get("path"), "./output")
 
     def test_results_and_writer_with_custom_dir(self):

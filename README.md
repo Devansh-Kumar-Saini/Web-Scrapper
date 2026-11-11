@@ -4,8 +4,8 @@ A free, self-hosted, developer-first web scraper and crawler. It follows links t
 
 Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a dataset, archiving a site, or testing selectors and URL filters against a real page.
 
-![Home Page Image](Screenshots/homePage.png)
-![Scrapping Image](Screenshots/scrapping.png)
+![Home Page Image](docs/screenshots/homePage.png)
+![Scrapping Image](docs/screenshots/scrapping.png)
 
 ## Features
 
@@ -70,7 +70,7 @@ docker run --rm -v "$(pwd)/output:/app/output" website-scraper \
 docker compose up -d --build
 ```
 
-See [DOCKER.md](DOCKER.md) for the full guide, including how to publish your own
+See [docs/DOCKER.md](docs/DOCKER.md) for the full guide, including how to publish your own
 free image and automate multi-architecture builds.
 
 ## Command-Line Interface (CLI)

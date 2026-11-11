@@ -87,11 +87,9 @@ def _resolve_output_dir(raw: str) -> Path:
 
 
 def _is_container() -> bool:
-    """True when the server runs in Docker or on a hosted platform."""
+    """True when the server runs in Docker or a containerized environment."""
     return bool(
         os.environ.get("SCRAPER_CONTAINER")
-        or os.environ.get("RENDER")
-        or os.environ.get("DYNO")
         or Path("/.dockerenv").exists()
         or Path("/run/.containerenv").exists()
     )
@@ -831,13 +829,6 @@ def api_pick_folder() -> Any:
             "container": True,
             "path": "./output",
             "message": "Running in Docker: files are saved to './output', which is mounted to the 'output' folder on your computer. Use Download ZIP to export them."
-        }), 200
-
-    if os.environ.get("RENDER") or os.environ.get("DYNO"):
-        return jsonify({
-            "is_cloud": True,
-            "path": "./output",
-            "message": "Folder selection is disabled on cloud deployments. Output files are saved to './output' and can be downloaded using the 'Download ZIP' button below."
         }), 200
 
     canceled, path, error = _pick_folder_native()

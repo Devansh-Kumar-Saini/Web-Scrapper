@@ -1,7 +1,11 @@
 .venv/
+venv/
+env/
 .DS_Store
 __pycache__/
 *.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
 output/
 Design/
-IMPROVEMENTS_REPORT.md
