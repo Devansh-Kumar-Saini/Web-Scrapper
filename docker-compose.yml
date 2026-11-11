@@ -7,6 +7,7 @@ services:
       - "5000:5000"
     environment:
       PORT: 5000
+      SCRAPER_CONTAINER: 1
     volumes:
       # Scraped files persist on the host in ./output
       - ./output:/app/output

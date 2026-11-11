@@ -92,6 +92,8 @@ def _is_container() -> bool:
         os.environ.get("SCRAPER_CONTAINER")
         or os.environ.get("RENDER")
         or os.environ.get("DYNO")
+        or Path("/.dockerenv").exists()
+        or Path("/run/.containerenv").exists()
     )
 
 
@@ -808,10 +810,22 @@ def api_system_info() -> Any:
     })
 
 
-@app.route("/api/system/pick-folder", methods=["POST"])
+@app.after_request
+def _add_cors_headers(response: Response) -> Response:
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+    return response
+
+
+@app.route("/api/system/pick-folder", methods=["GET", "POST", "OPTIONS"])
 def api_pick_folder() -> Any:
     """Open the host machine's native folder picker and return the chosen path."""
-    if os.environ.get("SCRAPER_CONTAINER"):
+    if request.method == "OPTIONS":
+        return "", 200
+
+    if _is_container():
         return jsonify({
             "is_cloud": True,
             "container": True,

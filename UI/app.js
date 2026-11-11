@@ -509,10 +509,30 @@
 
   // Native Folder Picker
   browseDirBtn.addEventListener("click", async () => {
+    if (state.isContainer) {
+      const containerPath = state.defaultOutputDir || "./output";
+      setSelectedOutputDir(containerPath, "Docker volume");
+      showToast(
+        "Running in Docker: files are saved to './output', which is mounted to the 'output' folder on your computer. Use Download ZIP to export them.",
+        "info",
+        6500
+      );
+      fetchOutputDirectory();
+      return;
+    }
+
     try {
       browseDirBtn.disabled = true;
       browseDirBtn.innerHTML = `<span>Browsing...</span>`;
       const resp = await fetch("/api/system/pick-folder", { method: "POST" });
+      if (!resp.ok) {
+        let errMsg = `HTTP ${resp.status}`;
+        try {
+          const errJson = await resp.json();
+          if (errJson.error) errMsg = errJson.error;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
       const data = await resp.json();
 
       if (data.canceled) {
@@ -520,11 +540,15 @@
         return;
       }
 
-      if (data.is_cloud) {
+      if (data.is_cloud || data.container) {
         // Docker/cloud: the output folder is controlled by the mounted volume.
+        state.isContainer = true;
         const containerPath = data.path || state.defaultOutputDir || "./output";
         setSelectedOutputDir(containerPath, "Docker volume");
-        showToast(data.message, "info", 6500);
+        if (browseDirBtn) {
+          browseDirBtn.title = "Docker controls this folder through a mounted volume";
+        }
+        showToast(data.message || "Running in Docker: files are saved to mounted volume './output'.", "info", 6500);
         fetchOutputDirectory();
         return;
       }
@@ -544,12 +568,21 @@
       showToast(`Folder selection failed: ${err.message}`, "error");
     } finally {
       browseDirBtn.disabled = false;
-      browseDirBtn.innerHTML = `
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
-        </svg>
-        Browse Folder
-      `;
+      if (state.isContainer) {
+        browseDirBtn.innerHTML = `
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+          </svg>
+          <span>Docker volume</span>
+        `;
+      } else {
+        browseDirBtn.innerHTML = `
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+          </svg>
+          <span>Browse Folder</span>
+        `;
+      }
     }
   });
 
