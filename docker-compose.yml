@@ -1,7 +1,7 @@
 services:
   website-scraper:
     build: .
-    image: devansh-kumar-saini/website-scraper:latest
+    image: website-scraper:latest
     container_name: website-scraper
     ports:
       - "5000:5000"
