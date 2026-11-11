@@ -1192,6 +1192,19 @@
       }
     });
 
+    state.eventSource.addEventListener("media_cleared", () => {
+      state.discoveredMedia = [];
+      state.mediaFilter = "";
+      renderMediaTable();
+      const navMediaBadge = document.getElementById("navMediaBadge");
+      if (navMediaBadge) {
+        navMediaBadge.textContent = "0";
+        navMediaBadge.style.display = "none";
+      }
+      const mediaTotalCountEl = document.getElementById("mediaTotalCount");
+      if (mediaTotalCountEl) mediaTotalCountEl.textContent = "0";
+    });
+
     state.eventSource.addEventListener("reset", () => {
       clearAllClientData();
     });
@@ -1986,7 +1999,21 @@
       outputFileList.innerHTML = '<p class="empty-hint">No files in directory yet.</p>';
     }
 
-    // 7. Reset Topbar & Sidebar indicators
+    // 7. Clear Media Extractor Catalog & Badge
+    state.discoveredMedia = [];
+    state.mediaFilter = "";
+    const navMediaBadge = document.getElementById("navMediaBadge");
+    if (navMediaBadge) {
+      navMediaBadge.textContent = "0";
+      navMediaBadge.style.display = "none";
+    }
+    const mediaTotalCountEl = document.getElementById("mediaTotalCount");
+    if (mediaTotalCountEl) mediaTotalCountEl.textContent = "0";
+    const mediaSearchInput = document.getElementById("mediaSearchInput");
+    if (mediaSearchInput) mediaSearchInput.value = "";
+    renderMediaTable();
+
+    // 8. Reset Topbar & Sidebar indicators
     if (statusPill) statusPill.className = "status-pill status-idle";
     if (statusText) statusText.textContent = "Idle";
     if (topbarTicker) topbarTicker.style.display = "none";
@@ -2532,6 +2559,50 @@
       refreshBtn.addEventListener("click", () => {
         fetchMediaCatalog();
         showToast("Refreshed media catalog", "info");
+      });
+    }
+
+    const clearMediaBtn = document.getElementById("clearMediaBtn");
+    if (clearMediaBtn) {
+      clearMediaBtn.addEventListener("click", async () => {
+        const dir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
+        if (state.discoveredMedia.length === 0) {
+          showToast("No media records to clear.", "info");
+          return;
+        }
+
+        const count = state.discoveredMedia.length;
+        const confirmed = confirm(
+          `Are you sure you want to clear media history and delete all saved media files from '${dir}'? This cannot be undone.`
+        );
+        if (!confirmed) return;
+
+        try {
+          const resp = await fetch("/api/media/clear", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ output_dir: dir, delete_files: true }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Failed to clear media");
+
+          state.discoveredMedia = [];
+          state.mediaFilter = "";
+          renderMediaTable();
+
+          const navMediaBadge = document.getElementById("navMediaBadge");
+          if (navMediaBadge) {
+            navMediaBadge.textContent = "0";
+            navMediaBadge.style.display = "none";
+          }
+          const mediaTotalCountEl = document.getElementById("mediaTotalCount");
+          if (mediaTotalCountEl) mediaTotalCountEl.textContent = "0";
+
+          fetchOutputDirectory();
+          showToast(`Media history cleared (${data.deleted_files || count} files removed)`, "info");
+        } catch (err) {
+          showToast(`Error clearing media: ${err.message}`, "error");
+        }
       });
     }
 

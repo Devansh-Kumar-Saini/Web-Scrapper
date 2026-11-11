@@ -358,6 +358,38 @@ class TestMediaExtractor(unittest.TestCase):
             self.assertEqual(data["status"], "success")
             self.assertEqual(data["downloaded"], 1)
 
+    def test_api_media_clear(self) -> None:
+        from Backend.app import app, job_manager
+
+        # Set up media files and manifests on disk
+        media_img_dir = self.output_dir / "media" / "image"
+        media_img_dir.mkdir(parents=True, exist_ok=True)
+        (media_img_dir / "pic.png").write_bytes(b"image data")
+        (self.output_dir / "media_manifest.json").write_text("[]", encoding="utf-8")
+        (self.output_dir / "media_manifest.csv").write_text("", encoding="utf-8")
+
+        with job_manager.lock:
+            job_manager.state.recent_media = [{"media_url": "https://example.com/pic.png"}]
+            job_manager.state.media_extracted = 1
+            job_manager.state.media_downloaded = 1
+
+        client = app.test_client()
+        resp = client.post("/api/media/clear", json={"output_dir": str(self.output_dir), "delete_files": True})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["status"], "cleared")
+        self.assertGreaterEqual(data["deleted_files"], 1)
+
+        # Verify disk files removed
+        self.assertFalse((media_img_dir / "pic.png").exists())
+        self.assertFalse((self.output_dir / "media").exists())
+        self.assertFalse((self.output_dir / "media_manifest.json").exists())
+
+        # Verify in-memory state cleared
+        self.assertEqual(len(job_manager.state.recent_media), 0)
+        self.assertEqual(job_manager.state.media_extracted, 0)
+        self.assertEqual(job_manager.state.media_downloaded, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1485,6 +1485,61 @@ def api_media_download() -> Any:
     })
 
 
+@app.route("/api/media/clear", methods=["POST"])
+def api_media_clear() -> Any:
+    """Clear discovered media catalog history and delete saved media files from disk."""
+    data = request.get_json(silent=True) or {}
+    out_path = _resolve_output_dir(str(data.get("output_dir", "./output")))
+    delete_files = _as_bool(data.get("delete_files", True), True)
+
+    deleted_count = 0
+    if delete_files and out_path.exists() and out_path.is_dir():
+        # 1. Delete files inside media/ directory
+        media_dir = out_path / "media"
+        if media_dir.exists() and media_dir.is_dir():
+            for item in sorted(media_dir.glob("**/*"), key=lambda p: len(str(p)), reverse=True):
+                if item.is_file():
+                    try:
+                        item.unlink()
+                        deleted_count += 1
+                    except OSError:
+                        pass
+                elif item.is_dir():
+                    try:
+                        item.rmdir()
+                    except OSError:
+                        pass
+            try:
+                media_dir.rmdir()
+            except OSError:
+                pass
+
+        # 2. Delete media manifests
+        for manifest_name in ("media_manifest.json", "media_manifest.csv"):
+            manifest_file = out_path / manifest_name
+            if manifest_file.is_file():
+                try:
+                    manifest_file.unlink()
+                    deleted_count += 1
+                except OSError:
+                    pass
+
+    with job_manager.lock:
+        job_manager.state.recent_media = []
+        job_manager.state.media_extracted = 0
+        job_manager.state.media_downloaded = 0
+
+    snap = job_manager.get_snapshot()
+    job_manager.broadcast("media_cleared", {"deleted_files": deleted_count})
+    job_manager.broadcast("stats", snap)
+
+    return jsonify({
+        "status": "cleared",
+        "deleted_files": deleted_count,
+        "output_dir": str(out_path),
+    })
+
+
 @app.route("/api/results/download", methods=["GET"])
 def api_results_download() -> Any:
     out_path = _resolve_output_dir(request.args.get("output_dir", "./output"))
