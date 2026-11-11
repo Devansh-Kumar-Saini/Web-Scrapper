@@ -20,6 +20,13 @@ try:
 except ImportError:  # pragma: no cover
     requests = None
 
+try:
+    from curl_cffi import requests as curl_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    curl_requests = None
+    HAS_CURL_CFFI = False
+
 # Extension mappings
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico",
@@ -219,16 +226,6 @@ def extract_media_from_html(
     if not html or not html.strip():
         return []
 
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, "html.parser")
-        except Exception:
-            return []
-
     types_filter = allowed_types if allowed_types is not None else set(MEDIA_CATEGORIES)
     items: list[MediaItem] = []
     seen_urls: set[str] = set()
@@ -259,15 +256,79 @@ def extract_media_from_html(
                 )
             )
 
+    # Fast C-based parser via lxml.html
+    try:
+        from lxml import html as lxml_html
+        tree = lxml_html.fromstring(html)
+
+        for img in tree.iter("img"):
+            alt_text = img.get("alt") or img.get("title") or ""
+            for attr in ("src", "data-src", "data-lazy-src", "data-original"):
+                val = img.get(attr)
+                if val:
+                    add_candidate(val, tag_hint="img", alt_text=alt_text)
+            srcset = img.get("srcset")
+            if srcset:
+                for c in _parse_srcset(srcset):
+                    add_candidate(c, tag_hint="img", alt_text=alt_text)
+
+        for src_tag in tree.iter("source"):
+            srcset = src_tag.get("srcset")
+            if srcset:
+                for c in _parse_srcset(srcset):
+                    add_candidate(c, tag_hint="picture")
+            s_val = src_tag.get("src")
+            if s_val:
+                parent_tag = getattr(src_tag.getparent(), "tag", "").lower() if src_tag.getparent() is not None else ""
+                hint = "video" if parent_tag == "video" else None
+                add_candidate(s_val, tag_hint=hint)
+
+        for video in tree.iter("video"):
+            alt_text = video.get("title") or video.get("aria-label") or ""
+            src = video.get("src")
+            if src:
+                add_candidate(src, tag_hint="video", alt_text=alt_text)
+            poster = video.get("poster")
+            if poster:
+                add_candidate(poster, tag_hint="img", alt_text=f"Video Poster: {alt_text}")
+
+        for embed in tree.iter("embed"):
+            val = embed.get("src")
+            if val:
+                add_candidate(val, tag_hint=None)
+        for obj in tree.iter("object"):
+            val = obj.get("data")
+            if val:
+                add_candidate(val, tag_hint=None)
+
+        for a in tree.iter("a"):
+            href = a.get("href")
+            if href:
+                text = (a.text_content() or "").strip() or a.get("title") or ""
+                add_candidate(href, tag_hint=None, alt_text=text)
+
+        return items
+    except Exception:
+        pass
+
+    # Fallback BeautifulSoup parser
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception:
+            return []
+
     # 1. <img> tags
     for img in soup.find_all("img"):
         alt_text = img.get("alt") or img.get("title") or ""
-        # Check src, data-src, data-lazy-src
         for attr in ("src", "data-src", "data-lazy-src", "data-original"):
             val = img.get(attr)
             if val:
                 add_candidate(str(val), tag_hint="img", alt_text=alt_text)
-        # Check srcset
         srcset = img.get("srcset")
         if srcset:
             for src_cand in _parse_srcset(str(srcset)):
@@ -295,13 +356,13 @@ def extract_media_from_html(
             if s_src:
                 add_candidate(str(s_src), tag_hint="video", alt_text=alt_text)
 
-    # 4. <embed> and <object> tags (e.g. PDFs or media players)
+    # 4. <embed> and <object> tags
     for embed in soup.find_all("embed", src=True):
         add_candidate(str(embed["src"]), tag_hint=None)
     for obj in soup.find_all("object", data=True):
         add_candidate(str(obj["data"]), tag_hint=None)
 
-    # 5. <a> anchor links pointing to media files (PDFs, Docs, PPTs, Images, Videos)
+    # 5. <a> anchor links pointing to media files
     for link in soup.find_all("a", href=True):
         href = str(link["href"]).strip()
         link_text = link.get_text(" ", strip=True) or link.get("title") or ""
@@ -317,8 +378,12 @@ def download_media_file(
     timeout: int = 20,
     max_bytes: int = 150 * 1024 * 1024,
 ) -> bool:
-    """Download a single media asset to disk inside ``output_dir/media/<media_type>/``."""
+    """Download a single media asset to disk inside ``output_dir/media/<media_type>/``.
+    
+    Supports both requests and curl_cffi sessions with streaming.
+    """
     try:
+        output_dir = Path(output_dir).resolve()
         category_dir = output_dir / "media" / item.media_type
         category_dir.mkdir(parents=True, exist_ok=True)
 
@@ -332,22 +397,61 @@ def download_media_file(
             target_file = category_dir / f"{stem}_{counter}{ext}"
             counter += 1
 
-        client = session or (requests.Session() if requests else None)
+        client = session
         if client is None:
-            item.download_status = "failed"
-            item.error = "HTTP client not available"
-            return False
+            if HAS_CURL_CFFI:
+                client = curl_requests.Session(impersonate="chrome")
+            elif requests:
+                client = requests.Session()
+            else:
+                item.download_status = "failed"
+                item.error = "HTTP client not available"
+                return False
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
             "Referer": item.page_url,
         }
 
-        with client.get(item.media_url, headers=headers, stream=True, timeout=timeout) as response:
+        response = None
+        try:
+            response = client.get(item.media_url, headers=headers, stream=True, timeout=timeout)
+        except Exception as net_err:
+            if requests and client is not requests:
+                try:
+                    response = requests.get(item.media_url, headers=headers, stream=True, timeout=timeout)
+                except Exception:
+                    raise net_err
+            else:
+                raise net_err
+
+        try:
             if response.status_code >= 400:
                 item.download_status = "failed"
                 item.error = f"HTTP {response.status_code}"
                 return False
+
+            # Infer extension from Content-Type if missing or generic
+            content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if not target_file.suffix and content_type:
+                ct_to_ext = {
+                    "image/jpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                    "image/svg+xml": ".svg",
+                    "application/pdf": ".pdf",
+                    "application/msword": ".doc",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                    "application/vnd.ms-powerpoint": ".ppt",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+                    "video/mp4": ".mp4",
+                    "video/webm": ".webm",
+                }
+                new_ext = ct_to_ext.get(content_type)
+                if new_ext:
+                    target_file = target_file.with_suffix(new_ext)
+                    item.extension = new_ext
 
             total = 0
             with target_file.open("wb") as handle:
@@ -368,11 +472,65 @@ def download_media_file(
             item.download_status = "downloaded"
             item.size_bytes = total
             return True
+        finally:
+            if hasattr(response, "close"):
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
     except Exception as exc:
         item.download_status = "failed"
         item.error = str(exc)
         return False
+
+
+def download_media_batch(
+    items: list[MediaItem],
+    output_dir: Path,
+    session: Any = None,
+    max_workers: int = 5,
+    on_item_downloaded: Callable[[MediaItem, bool], None] | None = None,
+) -> tuple[int, int]:
+    """Download a batch of media items concurrently using a thread pool.
+
+    Returns (downloaded_count, failed_count).
+    """
+    output_dir = Path(output_dir).resolve()
+    downloaded = 0
+    failed = 0
+
+    pending = [item for item in items if item.download_status != "downloaded"]
+    if not pending:
+        return 0, 0
+
+    worker_count = max(1, min(max_workers, len(pending)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(download_media_file, item, output_dir, session): item
+            for item in pending
+        }
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                ok = future.result()
+            except Exception as exc:
+                ok = False
+                item.download_status = "failed"
+                item.error = str(exc)
+
+            if ok:
+                downloaded += 1
+            else:
+                failed += 1
+
+            if on_item_downloaded:
+                try:
+                    on_item_downloaded(item, ok)
+                except Exception:
+                    pass
+
+    return downloaded, failed
 
 
 class MediaCollector:
@@ -395,33 +553,53 @@ class MediaCollector:
         self.downloaded_count = 0
         self.failed_downloads = 0
 
-    def add_page_media(
-        self,
-        page_url: str,
-        html: str,
-        output_dir: Path | None = None,
-    ) -> list[MediaItem]:
-        """Extract media from page HTML and optionally download new items."""
-        extracted = extract_media_from_html(html, page_url, allowed_types=self.allowed_types)
+    def add_items(self, items: list[MediaItem], output_dir: Path | None = None) -> list[MediaItem]:
+        """Add pre-extracted media items, skipping duplicates, with optional auto-flush."""
         new_items: list[MediaItem] = []
-
         with self._lock:
-            for item in extracted:
+            for item in items:
                 if item.media_url not in self._seen_media_urls:
                     self._seen_media_urls.add(item.media_url)
                     self.items.append(item)
                     new_items.append(item)
 
         if self.download and output_dir and new_items:
-            for item in new_items:
-                ok = download_media_file(item, output_dir, session=self.session)
-                with self._lock:
-                    if ok:
-                        self.downloaded_count += 1
-                    else:
-                        self.failed_downloads += 1
+            dl, fl = download_media_batch(new_items, output_dir, session=self.session, max_workers=5)
+            with self._lock:
+                self.downloaded_count += dl
+                self.failed_downloads += fl
+
+        if output_dir and new_items:
+            try:
+                self.write_manifests(output_dir)
+            except Exception:
+                pass
 
         return new_items
+
+    def add_page_media(
+        self,
+        page_url: str,
+        html: str,
+        output_dir: Path | None = None,
+    ) -> list[MediaItem]:
+        """Extract media from page HTML, record them, and auto-flush manifests."""
+        extracted = extract_media_from_html(html, page_url, allowed_types=self.allowed_types)
+        return self.add_items(extracted, output_dir=output_dir)
+
+    def download_all(self, output_dir: Path, max_workers: int = 6) -> tuple[int, int]:
+        """Download all pending media items concurrently and write updated manifests."""
+        dl, fl = download_media_batch(
+            self.items,
+            output_dir,
+            session=self.session,
+            max_workers=max_workers,
+        )
+        with self._lock:
+            self.downloaded_count += dl
+            self.failed_downloads += fl
+        self.write_manifests(output_dir)
+        return dl, fl
 
     def write_manifests(self, output_dir: Path) -> tuple[Path, Path]:
         """Write media_manifest.json and media_manifest.csv into output_dir."""

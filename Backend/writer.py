@@ -201,6 +201,7 @@ class OutputWriter:
         if self.media_only:
             entry["mode"] = "media_only"
             self.manifest.append(entry)
+            self._flush_manifest()
             return ""
 
         if self.output_format != "txt":
@@ -266,7 +267,14 @@ class OutputWriter:
         if document.word_count:
             entry["word_count"] = document.word_count
         self.manifest.append(entry)
+        self._flush_manifest()
         return filename
+
+    def _flush_manifest(self) -> None:
+        try:
+            (self.output_dir / "index.json").write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def save_page(self, url: str, title: str, text: str, depth: int) -> str:
         """Backward-compatible helper for saving plain extracted text."""
@@ -279,6 +287,6 @@ class OutputWriter:
                 self._sqlite_connection.close()
             finally:
                 self._sqlite_connection = None
-        (self.output_dir / "index.json").write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
+        self._flush_manifest()
         self.files_written += 1
         self.written_files.add("index.json")

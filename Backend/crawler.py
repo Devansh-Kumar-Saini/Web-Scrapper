@@ -324,7 +324,8 @@ class Crawler:
                     discovered.append(candidate)
             return page, discovered
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency)
+        try:
             nonlocal_queued = queued_count
 
             def schedule_workers() -> None:
@@ -386,3 +387,12 @@ class Crawler:
                     if self.on_page_crawled:
                         self.on_page_crawled(page)
                     yield page
+        finally:
+            with state_lock:
+                for fut in active_futures:
+                    fut.cancel()
+                active_futures.clear()
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=False)

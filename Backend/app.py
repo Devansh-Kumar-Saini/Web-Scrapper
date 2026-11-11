@@ -25,10 +25,10 @@ try:
     from .crawler import Crawler
     from .exporter import build_results_zip
     from .exporter import normalize_format as normalize_download_format
-    from .extractor import extract_structured, parse_schema, validate_selectors
+    from .extractor import PageContent, extract_structured, parse_schema, validate_selectors
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import parse_patterns, parse_selectors
-    from .media import MEDIA_CATEGORIES, MediaCollector, parse_media_types
+    from .media import MEDIA_CATEGORIES, MediaCollector, MediaItem, extract_media_from_html, parse_media_types
     from .scraper import scrape_url
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -38,10 +38,10 @@ except ImportError:
     from crawler import Crawler
     from exporter import build_results_zip
     from exporter import normalize_format as normalize_download_format
-    from extractor import extract_structured, parse_schema, validate_selectors
+    from extractor import PageContent, extract_structured, parse_schema, validate_selectors
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from filters import parse_patterns, parse_selectors
-    from media import MEDIA_CATEGORIES, MediaCollector, parse_media_types
+    from media import MEDIA_CATEGORIES, MediaCollector, MediaItem, extract_media_from_html, parse_media_types
     from scraper import scrape_url
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -334,7 +334,7 @@ class JobManager:
 
     def reset(self) -> None:
         with self.lock:
-            if self.state.status == "running":
+            if self.state.status in {"running", "stopping"}:
                 self.stop_event.set()
             self.state = JobState()
         snap = self.get_snapshot()
@@ -627,6 +627,24 @@ class JobManager:
             )
 
         def _extract_page(page_url: str, page_html: str, page_depth: int) -> Any:
+            if media_only:
+                m_title = ""
+                m = re.search(r"<title[^>]*>(.*?)</title>", page_html, re.IGNORECASE | re.DOTALL)
+                if m:
+                    m_title = re.sub(r"\s+", " ", m.group(1)).strip()
+                m_items = extract_media_from_html(page_html, page_url=page_url, allowed_types=allowed_t) if extract_media else []
+                return PageContent(
+                    url=page_url,
+                    title=m_title,
+                    text="",
+                    markdown="",
+                    chunks=[],
+                    links=[],
+                    images=[],
+                    headings=[],
+                    metadata={"title": m_title, "url": page_url},
+                    media=[item.to_dict() for item in m_items],
+                )
             return extract_structured(
                 page_html,
                 url=page_url,
@@ -751,11 +769,33 @@ class JobManager:
                             continue
 
                     if media_collector is not None:
-                        new_media = media_collector.add_page_media(
-                            page.url,
-                            page.html,
-                            output_dir=out_path if download_media else None,
-                        )
+                        # Reuse already extracted media items from document if available
+                        if getattr(document, "media", None) is not None:
+                            doc_items = [
+                                MediaItem(
+                                    page_url=m.get("page_url", page.url),
+                                    media_type=m.get("media_type", "image"),
+                                    media_url=m.get("media_url") or m.get("url", ""),
+                                    filename=m.get("filename", ""),
+                                    extension=m.get("extension", ""),
+                                    alt=m.get("alt", ""),
+                                    downloaded_path=m.get("downloaded_path", ""),
+                                    download_status=m.get("download_status", "pending"),
+                                    size_bytes=m.get("size_bytes", 0),
+                                )
+                                for m in document.media
+                                if isinstance(m, dict) and (m.get("media_url") or m.get("url"))
+                            ]
+                            new_media = media_collector.add_items(
+                                doc_items,
+                                output_dir=out_path if download_media else None,
+                            )
+                        else:
+                            new_media = media_collector.add_page_media(
+                                page.url,
+                                page.html,
+                                output_dir=out_path if download_media else None,
+                            )
                         if new_media:
                             with self.lock:
                                 self.state.media_extracted = len(media_collector.items)
@@ -814,11 +854,15 @@ class JobManager:
                 self.state.pages_skipped = len(crawler.skipped_reasons)
                 self.state.finished_at = time.monotonic()
                 self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
-                self.state.status = "completed"
+                self.state.status = "stopped" if stopped else "completed"
                 saved_count = self.state.pages_saved
 
             if stopped:
-                self.log("WARN", "Crawl stopped by user. Manifest saved.")
+                self.log(
+                    "WARN",
+                    f"Crawl stopped by user. Progress saved: {saved_count} page(s), "
+                    f"{len(media_collector.items) if media_collector else 0} media asset(s).",
+                )
             else:
                 self.log("INFO", f"Crawl completed successfully! Saved {saved_count} pages.")
             self._notify_webhook(
@@ -838,13 +882,19 @@ class JobManager:
             logger.removeHandler(file_handler)
             logger.removeHandler(ui_handler)
             file_handler.close()
+            stopped = self.stop_event.is_set()
             with self.lock:
                 self.state.current_url = ""
                 self.worker_thread = None
+                if stopped and self.state.status != "failed":
+                    self.state.status = "stopped"
             snap = self.get_snapshot()
             self.broadcast("stats", snap)
             self.broadcast("status", snap)
-            self.broadcast("completed", snap)
+            if stopped:
+                self.broadcast("stopped", snap)
+            else:
+                self.broadcast("completed", snap)
 
 
 job_manager = JobManager()
@@ -1345,6 +1395,93 @@ def api_media() -> Any:
         "output_dir": str(out_path),
         "total_media": len(media_items),
         "media": media_items,
+    })
+
+
+@app.route("/api/media/download", methods=["POST"])
+def api_media_download() -> Any:
+    """Download discovered media files to disk inside output_dir/media/<type>/ on demand."""
+    data = request.get_json(silent=True) or {}
+    out_path = _resolve_output_dir(data.get("output_dir") or request.args.get("output_dir", "./output"))
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    media_file = out_path / "media_manifest.json"
+    items_to_download: list[MediaItem] = []
+    seen_urls: set[str] = set()
+
+    if media_file.is_file():
+        try:
+            records = json.loads(media_file.read_text(encoding="utf-8"))
+            for r in records:
+                if isinstance(r, dict) and r.get("media_url") and r.get("media_url") not in seen_urls:
+                    seen_urls.add(r["media_url"])
+                    items_to_download.append(
+                        MediaItem(
+                            page_url=r.get("page_url", ""),
+                            media_type=r.get("media_type", "image"),
+                            media_url=r.get("media_url", ""),
+                            filename=r.get("filename", ""),
+                            extension=r.get("extension", ""),
+                            alt=r.get("alt", ""),
+                            downloaded_path=r.get("downloaded_path", ""),
+                            download_status=r.get("download_status", "pending"),
+                            size_bytes=r.get("size_bytes", 0),
+                        )
+                    )
+        except Exception as exc:
+            return jsonify({"error": f"Failed to read media manifest: {exc}"}), 500
+
+    if not items_to_download:
+        with job_manager.lock:
+            for r in job_manager.state.recent_media:
+                if isinstance(r, dict) and r.get("media_url") and r.get("media_url") not in seen_urls:
+                    seen_urls.add(r["media_url"])
+                    items_to_download.append(
+                        MediaItem(
+                            page_url=r.get("page_url", ""),
+                            media_type=r.get("media_type", "image"),
+                            media_url=r.get("media_url", ""),
+                            filename=r.get("filename", ""),
+                            extension=r.get("extension", ""),
+                            alt=r.get("alt", ""),
+                            downloaded_path=r.get("downloaded_path", ""),
+                            download_status=r.get("download_status", "pending"),
+                            size_bytes=r.get("size_bytes", 0),
+                        )
+                    )
+
+    if not items_to_download:
+        return jsonify({"error": "No discovered media files found to download."}), 404
+
+    try:
+        from .media import download_media_batch
+    except ImportError:
+        from media import download_media_batch
+
+    downloaded, failed = download_media_batch(items_to_download, out_path, max_workers=6)
+
+    # Save updated manifests
+    manifest_records = [item.to_dict() for item in items_to_download]
+    (out_path / "media_manifest.json").write_text(
+        json.dumps(manifest_records, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with job_manager.lock:
+        job_manager.state.media_downloaded = sum(
+            1 for m in items_to_download if m.download_status == "downloaded"
+        )
+        job_manager.state.recent_media = manifest_records[-300:]
+
+    job_manager.broadcast("stats", job_manager.get_stats())
+
+    return jsonify({
+        "status": "success",
+        "downloaded": downloaded,
+        "failed": failed,
+        "total": len(items_to_download),
+        "output_dir": str(out_path),
+        "media": manifest_records,
     })
 
 

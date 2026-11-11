@@ -868,8 +868,19 @@
       const resp = await fetch("/api/scrape/stop", { method: "POST" });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || "Failed to stop crawl");
-      showToast("Stopping crawl gracefully...", "warn");
+      showToast("Stopping crawler and saving files to disk...", "warn");
       updateStatus("stopping");
+
+      // Fallback check: if still stopping after 3s, force check status
+      setTimeout(async () => {
+        try {
+          const sResp = await fetch("/api/scrape/status");
+          if (sResp.ok) {
+            const snap = await sResp.json();
+            if (snap.status) syncSnapshot(snap);
+          }
+        } catch (_) {}
+      }, 3000);
     } catch (err) {
       showToast(err.message, "error");
       globalStopBtn.disabled = false;
@@ -882,7 +893,7 @@
   function startStatusPolling() {
     if (statusPollTimer) return;
     statusPollTimer = setInterval(async () => {
-      if (!state.isRunning) {
+      if (!state.isRunning && !state.isStopping) {
         stopStatusPolling();
         return;
       }
@@ -890,15 +901,17 @@
         const resp = await fetch("/api/scrape/status");
         if (resp.ok) {
           const snap = await resp.json();
-          if (snap.status && snap.status !== "running") {
+          if (snap.status) {
             syncSnapshot(snap);
-            stopStatusPolling();
+            if (snap.status !== "running" && snap.status !== "stopping") {
+              stopStatusPolling();
+            }
           }
         }
       } catch (_) {
         // Transient network errors ignored; SSE or next poll will catch it
       }
-    }, 1000);
+    }, 800);
   }
 
   function stopStatusPolling() {
@@ -923,6 +936,7 @@
 
     if (status === "running") {
       state.isRunning = true;
+      state.isStopping = false;
       globalStartBtn.disabled = true;
       submitCrawlBtn.disabled = true;
       globalStopBtn.disabled = false;
@@ -936,9 +950,21 @@
       }
       startVelocitySampling();
       startStatusPolling();
+    } else if (status === "stopping") {
+      state.isRunning = true;
+      state.isStopping = true;
+      globalStartBtn.disabled = true;
+      submitCrawlBtn.disabled = true;
+      globalStopBtn.disabled = true;
+      sidebarPulse.className = "pulse-dot";
+      sidebarStatusText.textContent = "Stopping Crawler...";
+      monitorDepthTag.textContent = "Stopping";
+      monitorUrlText.textContent = "Halting workers and saving crawl progress to disk...";
+      startStatusPolling();
     } else {
       const wasRunning = state.isRunning;
       state.isRunning = false;
+      state.isStopping = false;
       stopStatusPolling();
       globalStartBtn.disabled = false;
       submitCrawlBtn.disabled = false;
@@ -968,8 +994,12 @@
         }
       } else if (status === "stopped") {
         monitorDepthTag.textContent = "Stopped";
-        monitorUrlText.textContent = isDryRun ? "Dry run stopped by user." : "Crawl stopped by user.";
-        if (wasRunning) showToast(isDryRun ? "Dry run stopped" : "Crawl stopped", "info");
+        monitorUrlText.textContent = isDryRun ? "Dry run stopped by user." : "Crawl stopped by user. All progress saved.";
+        if (wasRunning) {
+          showToast(isDryRun ? "Dry run stopped" : "Crawl stopped. Progress saved to disk.", "info");
+          fetchSavedPages();
+          fetchOutputDirectory();
+        }
       } else if (status === "failed") {
         monitorDepthTag.textContent = "Error";
         monitorUrlText.textContent = errorMsg || "Crawl ended due to an error.";
@@ -1112,6 +1142,15 @@
         syncSnapshot(data);
       } catch (err) {
         console.error("Failed to parse SSE completed:", err);
+      }
+    });
+
+    state.eventSource.addEventListener("stopped", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        syncSnapshot(data);
+      } catch (err) {
+        console.error("Failed to parse SSE stopped:", err);
       }
     });
 
@@ -1365,17 +1404,22 @@
 
   if (monitorResetBtn) {
     monitorResetBtn.addEventListener("click", async () => {
-      if (state.isRunning) {
-        showToast("Please stop the active crawl job before resetting the session.", "warn");
-        return;
+      if (state.isRunning && !state.isStopping) {
+        const confirmForce = confirm("A crawl job is currently active. Halt and reset the session now?");
+        if (!confirmForce) return;
+        try {
+          await fetch("/api/scrape/stop", { method: "POST" });
+        } catch (_) {}
+      } else {
+        const confirmed = confirm("Are you sure you want to reset the live monitor telemetry and session metrics?");
+        if (!confirmed) return;
       }
-      const confirmed = confirm("Are you sure you want to reset the live monitor telemetry and session metrics?");
-      if (!confirmed) return;
 
       try {
         await fetch("/api/scrape/reset", { method: "POST" });
       } catch (_) {}
       clearAllClientData();
+      updateStatus("idle");
       showToast("Live Monitor and session data reset", "info");
     });
   }
@@ -2302,15 +2346,27 @@
   // =========================================================================
   // Media Extractor UI Logic
   // =========================================================================
+  let mediaRenderDebounceTimer = null;
+  function scheduleMediaRender() {
+    if (mediaRenderDebounceTimer) return;
+    mediaRenderDebounceTimer = setTimeout(() => {
+      mediaRenderDebounceTimer = null;
+      renderMediaTable();
+    }, 120);
+  }
+
   function addDiscoveredMedia(items) {
     if (!items || !items.length) return;
     const seen = new Set(state.discoveredMedia.map((m) => m.media_url));
+    let hasNew = false;
     for (const item of items) {
       if (!seen.has(item.media_url)) {
         seen.add(item.media_url);
         state.discoveredMedia.unshift(item);
+        hasNew = true;
       }
     }
+    if (!hasNew) return;
     if (state.discoveredMedia.length > 500) {
       state.discoveredMedia = state.discoveredMedia.slice(0, 500);
     }
@@ -2321,7 +2377,7 @@
     }
     const totalCountEl = document.getElementById("mediaTotalCount");
     if (totalCountEl) totalCountEl.textContent = state.discoveredMedia.length;
-    renderMediaTable();
+    scheduleMediaRender();
   }
 
   function getBadgeClassForType(type) {
@@ -2408,13 +2464,60 @@
 
   function initMediaExtractor() {
     const modeRadios = document.querySelectorAll('input[name="mediaModeOption"]');
+    const downloadMediaCheckbox = document.getElementById("downloadMediaFiles");
     modeRadios.forEach((r) => {
       r.addEventListener("change", () => {
         document.querySelectorAll(".media-mode-card").forEach((card) => {
           card.classList.toggle("active", card.contains(r) && r.checked);
         });
+        if (r.value === "media-only" && r.checked && downloadMediaCheckbox) {
+          downloadMediaCheckbox.checked = true;
+        }
       });
     });
+
+    const masterToggle = document.getElementById("enableMediaExtractor");
+    if (masterToggle) {
+      masterToggle.addEventListener("change", () => {
+        if (masterToggle.checked && downloadMediaCheckbox && !downloadMediaCheckbox.checked) {
+          downloadMediaCheckbox.checked = true;
+        }
+      });
+    }
+
+    const downloadAllBtn = document.getElementById("downloadAllMediaBtn");
+    if (downloadAllBtn) {
+      downloadAllBtn.addEventListener("click", async () => {
+        const dir = getSelectedOutputDir();
+        downloadAllBtn.disabled = true;
+        downloadAllBtn.textContent = "Downloading...";
+        showToast("Starting download of discovered media files...", "info");
+
+        try {
+          const resp = await fetch("/api/media/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ output_dir: dir }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Failed to download media");
+
+          showToast(`Downloaded ${data.downloaded} media file(s) to output/media/!`, "success", 4000);
+          if (data.media && Array.isArray(data.media)) {
+            state.discoveredMedia = data.media;
+            renderMediaTable();
+          } else {
+            fetchMediaCatalog();
+          }
+          fetchOutputDirectory();
+        } catch (err) {
+          showToast(`Media download error: ${err.message}`, "error");
+        } finally {
+          downloadAllBtn.disabled = false;
+          downloadAllBtn.textContent = "Download All to Disk";
+        }
+      });
+    }
 
     const searchInput = document.getElementById("mediaSearchInput");
     if (searchInput) {

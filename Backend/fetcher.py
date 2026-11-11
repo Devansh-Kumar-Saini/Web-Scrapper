@@ -114,6 +114,7 @@ class Fetcher:
         self.is_curl_cffi = bool(impersonate and HAS_CURL_CFFI)
         self._robots: dict[str, RobotFileParser] = {}
         self._last_request: dict[str, float] = {}
+        self._active_sessions: list[Any] = []
         self._lock = threading.Lock()
 
     @property
@@ -152,6 +153,8 @@ class Fetcher:
         sess.headers.update(DEFAULT_BROWSER_HEADERS)
         sess.headers["User-Agent"] = self.user_agent
         self._thread_local.session = sess
+        with self._lock:
+            self._active_sessions.append(sess)
         return sess
 
     # --- robots.txt ---
@@ -188,13 +191,14 @@ class Fetcher:
     # --- politeness ---
 
     def _wait_for_domain(self, domain: str) -> None:
-        if self.delay <= 0:
+        if self.delay <= 0 or (self.stop_event and self.stop_event.is_set()):
             return
         with self._lock:
             now = time.monotonic()
-            next_allowed = max(self._last_request.get(domain, 0.0), now)
-            self._last_request[domain] = next_allowed + self.delay
-            wait_time = next_allowed - now
+            last = self._last_request.get(domain, 0.0)
+            target = max(now, last + self.delay)
+            wait_time = target - now
+            self._last_request[domain] = target
 
         if wait_time > 0:
             if self.stop_event:
@@ -266,6 +270,14 @@ class Fetcher:
         try:
             if self._custom_session is not None and hasattr(self._custom_session, "close"):
                 self._custom_session.close()
+            with self._lock:
+                for sess in self._active_sessions:
+                    try:
+                        if hasattr(sess, "close"):
+                            sess.close()
+                    except Exception:
+                        pass
+                self._active_sessions.clear()
             local_sess = getattr(self._thread_local, "session", None)
             if local_sess is not None and hasattr(local_sess, "close"):
                 local_sess.close()

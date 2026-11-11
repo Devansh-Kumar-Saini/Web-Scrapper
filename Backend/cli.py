@@ -493,11 +493,33 @@ def run(args: argparse.Namespace) -> int:
                 continue
 
             if media_collector is not None:
-                new_media = media_collector.add_page_media(
-                    page.url,
-                    page.html,
-                    output_dir=output if download_media_flag else None,
-                )
+                if getattr(document, "media", None) is not None:
+                    from .media import MediaItem
+                    doc_items = [
+                        MediaItem(
+                            page_url=m.get("page_url", page.url),
+                            media_type=m.get("media_type", "image"),
+                            media_url=m.get("media_url") or m.get("url", ""),
+                            filename=m.get("filename", ""),
+                            extension=m.get("extension", ""),
+                            alt=m.get("alt", ""),
+                            downloaded_path=m.get("downloaded_path", ""),
+                            download_status=m.get("download_status", "pending"),
+                            size_bytes=m.get("size_bytes", 0),
+                        )
+                        for m in document.media
+                        if isinstance(m, dict) and (m.get("media_url") or m.get("url"))
+                    ]
+                    new_media = media_collector.add_items(
+                        doc_items,
+                        output_dir=output if download_media_flag else None,
+                    )
+                else:
+                    new_media = media_collector.add_page_media(
+                        page.url,
+                        page.html,
+                        output_dir=output if download_media_flag else None,
+                    )
                 if not is_piped and new_media:
                     print(f"  [media] extracted {len(new_media)} media file(s) from {page.url}")
 

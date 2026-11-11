@@ -248,6 +248,55 @@ class TestMediaExtractor(unittest.TestCase):
         self.assertEqual(data["total_media"], 1)
         self.assertEqual(data["media"][0]["media_type"], "pdf")
 
+    def test_progressive_manifest_flushing(self) -> None:
+        """Verify manifests are flushed to disk on every addition so nothing is lost if stopped."""
+        collector = MediaCollector(allowed_types={"image", "pdf"})
+        page1_html = '<a href="/file1.pdf">PDF 1</a>'
+        collector.add_page_media("https://example.com/p1", page1_html, output_dir=self.output_dir)
+
+        json_path = self.output_dir / "media_manifest.json"
+        csv_path = self.output_dir / "media_manifest.csv"
+        self.assertTrue(json_path.exists())
+        self.assertTrue(csv_path.exists())
+
+        data1 = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data1), 1)
+        self.assertEqual(data1[0]["filename"], "file1.pdf")
+
+        # Second page addition immediately updates manifest files on disk
+        page2_html = '<img src="/pic.png" alt="Pic">'
+        collector.add_page_media("https://example.com/p2", page2_html, output_dir=self.output_dir)
+
+        data2 = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data2), 2)
+
+    def test_output_writer_progressive_manifest_flushing(self) -> None:
+        """Verify OutputWriter flushes index.json after saving each page."""
+        writer = OutputWriter(str(self.output_dir), output_format="txt")
+        doc1 = PageContent(url="https://example.com/page1", title="Page 1", text="Hello 1")
+        writer.save_document(doc1, depth=0)
+
+        index_file = self.output_dir / "index.json"
+        self.assertTrue(index_file.exists())
+        records = json.loads(index_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["url"], "https://example.com/page1")
+
+    def test_job_manager_stop_and_reset(self) -> None:
+        """Verify job manager properly transitions to stopped and reset."""
+        from Backend.app import job_manager
+        with job_manager.lock:
+            job_manager.state.status = "running"
+        
+        ok, msg = job_manager.stop_crawl()
+        self.assertTrue(ok)
+        self.assertEqual(job_manager.state.status, "stopping")
+        self.assertTrue(job_manager.stop_event.is_set())
+
+        # Resetting while stopping clears state and stops
+        job_manager.reset()
+        self.assertEqual(job_manager.state.status, "idle")
+
     @patch("Backend.app.scrape_url")
     def test_api_scrape_with_extract_media(self, mock_scrape_url: MagicMock) -> None:
         from Backend.app import app
@@ -267,6 +316,47 @@ class TestMediaExtractor(unittest.TestCase):
         self.assertIn("media", data)
         self.assertEqual(len(data["media"]), 1)
         self.assertEqual(data["media"][0]["media_type"], "pdf")
+
+    def test_download_media_batch_and_api_endpoint(self) -> None:
+        from Backend.app import app
+        from Backend.media import download_media_batch
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "image/png"}
+        mock_resp.iter_content.return_value = [b"chunk1", b"chunk2"]
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        items = [
+            MediaItem(page_url="https://example.com", media_type="image", media_url="https://example.com/img1.png"),
+            MediaItem(page_url="https://example.com", media_type="image", media_url="https://example.com/img2.png"),
+        ]
+
+        dl, fl = download_media_batch(items, self.output_dir, session=mock_session)
+        self.assertEqual(dl, 2)
+        self.assertEqual(fl, 0)
+        self.assertTrue((self.output_dir / "media" / "image" / "img1.png").is_file())
+        self.assertTrue((self.output_dir / "media" / "image" / "img2.png").is_file())
+
+        # Test POST /api/media/download
+        (self.output_dir / "media_manifest.json").write_text(
+            json.dumps([{"page_url": "https://example.com", "media_type": "image", "media_url": "https://example.com/img3.png"}]),
+            encoding="utf-8",
+        )
+        with patch("Backend.media.download_media_file") as mock_dl:
+            def _fake_dl(item, out, session=None):
+                item.download_status = "downloaded"
+                item.downloaded_path = f"media/{item.media_type}/{item.filename}"
+                return True
+            mock_dl.side_effect = _fake_dl
+
+            client = app.test_client()
+            resp = client.post("/api/media/download", json={"output_dir": str(self.output_dir)})
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["downloaded"], 1)
 
 
 if __name__ == "__main__":
