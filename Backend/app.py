@@ -270,9 +270,14 @@ class JobManager:
                         pass
 
     def log(self, level: str, message: str) -> None:
+        lvl = str(level).strip().upper()
+        if lvl == "WARNING":
+            lvl = "WARN"
+        elif lvl in {"CRITICAL", "FATAL"}:
+            lvl = "ERROR"
         entry = {
             "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-            "level": level.upper(),
+            "level": lvl,
             "message": message,
         }
         with self.lock:
@@ -280,6 +285,10 @@ class JobManager:
             if len(self.state.logs) > 500:
                 self.state.logs.pop(0)
         self.broadcast("log", entry)
+
+    def clear_logs(self) -> None:
+        with self.lock:
+            self.state.logs = []
 
     def get_snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -1085,6 +1094,12 @@ def api_scrape_status() -> Any:
 def api_scrape_reset() -> Any:
     job_manager.reset()
     return jsonify({"status": "reset", "snapshot": job_manager.get_snapshot()})
+
+
+@app.route("/api/scrape/logs/clear", methods=["POST"])
+def api_scrape_logs_clear() -> Any:
+    job_manager.clear_logs()
+    return jsonify({"status": "cleared"})
 
 
 @app.route("/api/scrape/events", methods=["GET"])

@@ -140,6 +140,7 @@
   const terminalCounter = document.getElementById("terminalCounter");
   const terminalAutoScroll = document.getElementById("terminalAutoScroll");
   const terminalClearBtn = document.getElementById("terminalClearBtn");
+  const monitorResetBtn = document.getElementById("monitorResetBtn");
   const levelPills = document.querySelectorAll(".level-pill");
 
   // Saved Pages Catalog
@@ -147,6 +148,7 @@
   const catalogSearchInput = document.getElementById("catalogSearchInput");
   const catalogTotalCount = document.getElementById("catalogTotalCount");
   const refreshCatalogBtn = document.getElementById("refreshCatalogBtn");
+  const clearCatalogBtn = document.getElementById("clearCatalogBtn");
   const downloadZipCatalogBtn = document.getElementById("downloadZipCatalogBtn");
   const downloadFormatCatalog = document.getElementById("downloadFormatCatalog");
 
@@ -1167,21 +1169,44 @@
     });
   }
 
+  function normalizeLogLevel(level) {
+    const lvl = String(level || "INFO").trim().toUpperCase();
+    if (lvl === "WARNING" || lvl === "WARN") return "WARN";
+    if (lvl === "ERROR" || lvl === "CRITICAL" || lvl === "FATAL" || lvl === "EXCEPTION") return "ERROR";
+    if (lvl === "INFO") return "INFO";
+    if (lvl === "DEBUG") return "DEBUG";
+    return lvl;
+  }
+
+  function matchesLogFilter(entryLevel, filter) {
+    if (!filter || filter === "ALL") return true;
+    return normalizeLogLevel(entryLevel) === normalizeLogLevel(filter);
+  }
+
   function appendLogEntry(entry) {
     state.allLogs.push(entry);
     if (state.allLogs.length > 600) state.allLogs.shift();
 
     if (navLogBadge) navLogBadge.textContent = state.allLogs.length;
-    if (terminalCounter) terminalCounter.textContent = `${state.allLogs.length} logs`;
 
-    if (state.currentLogFilter === "ALL" || entry.level === state.currentLogFilter) {
+    if (matchesLogFilter(entry.level, state.currentLogFilter)) {
       renderLogDOM(entry);
+    }
+
+    if (terminalCounter) {
+      if (state.currentLogFilter === "ALL") {
+        terminalCounter.textContent = `${state.allLogs.length} logs`;
+      } else {
+        const count = state.allLogs.filter((e) => matchesLogFilter(e.level, state.currentLogFilter)).length;
+        terminalCounter.textContent = `${count} / ${state.allLogs.length} logs (${state.currentLogFilter})`;
+      }
     }
   }
 
   function createLogRowElement(entry) {
     const row = document.createElement("div");
-    const lvl = (entry.level || "INFO").toLowerCase();
+    const norm = normalizeLogLevel(entry.level);
+    const lvl = norm.toLowerCase();
     row.className = `log-row log-${lvl}`;
 
     const ts = document.createElement("span");
@@ -1190,7 +1215,7 @@
 
     const tag = document.createElement("span");
     tag.className = "log-tag";
-    tag.textContent = entry.level || "INFO";
+    tag.textContent = norm;
 
     const content = document.createElement("span");
     content.className = "log-content";
@@ -1228,23 +1253,53 @@
     terminalConsole.innerHTML = "";
     const fragment = document.createDocumentFragment();
     const relevantLogs = state.allLogs.filter(
-      (e) => state.currentLogFilter === "ALL" || e.level === state.currentLogFilter
+      (e) => matchesLogFilter(e.level, state.currentLogFilter)
     );
     const visibleLogs = relevantLogs.slice(-400);
     for (const entry of visibleLogs) {
       fragment.appendChild(createLogRowElement(entry));
     }
     terminalConsole.appendChild(fragment);
+
+    if (terminalCounter) {
+      if (state.currentLogFilter === "ALL") {
+        terminalCounter.textContent = `${state.allLogs.length} logs`;
+      } else {
+        terminalCounter.textContent = `${relevantLogs.length} / ${state.allLogs.length} logs (${state.currentLogFilter})`;
+      }
+    }
     requestConsoleScroll();
   }
 
-  terminalClearBtn.addEventListener("click", () => {
-    state.allLogs = [];
-    terminalConsole.innerHTML = "";
-    navLogBadge.textContent = "0";
-    terminalCounter.textContent = "0 logs";
-    showToast("Terminal logs cleared", "info", 1500);
-  });
+  if (terminalClearBtn) {
+    terminalClearBtn.addEventListener("click", async () => {
+      state.allLogs = [];
+      if (terminalConsole) terminalConsole.innerHTML = "";
+      if (navLogBadge) navLogBadge.textContent = "0";
+      if (terminalCounter) terminalCounter.textContent = "0 logs";
+      try {
+        await fetch("/api/scrape/logs/clear", { method: "POST" });
+      } catch (_) {}
+      showToast("Console logs cleared", "info", 1500);
+    });
+  }
+
+  if (monitorResetBtn) {
+    monitorResetBtn.addEventListener("click", async () => {
+      if (state.isRunning) {
+        showToast("Please stop the active crawl job before resetting the session.", "warn");
+        return;
+      }
+      const confirmed = confirm("Are you sure you want to reset the live monitor telemetry and session metrics?");
+      if (!confirmed) return;
+
+      try {
+        await fetch("/api/scrape/reset", { method: "POST" });
+      } catch (_) {}
+      clearAllClientData();
+      showToast("Live Monitor and session data reset", "info");
+    });
+  }
 
   // =========================================================================
   // Single URL Inspector (Interactive Scraper Tester)
@@ -1557,7 +1612,7 @@
   }
 
   async function fetchSavedPages() {
-    const outDir = getSelectedOutputDir();
+    const outDir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
     if (!outDir) return;
     const data = await fetchResultsData(outDir);
     if (!data) return;
@@ -1664,16 +1719,40 @@
     showToast("Catalog refreshed from disk", "info");
   });
 
+  if (clearCatalogBtn) {
+    clearCatalogBtn.addEventListener("click", async () => {
+      const outDir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
+      if (state.savedPages.length === 0) {
+        showToast("No saved pages to clear.", "info");
+        return;
+      }
+      const count = state.savedPages.length;
+      const confirmed = confirm(`Are you sure you want to delete all ${count} saved pages from '${outDir}'? This cannot be undone.`);
+      if (!confirmed) return;
+
+      try {
+        const resp = await fetch("/api/results/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ output_dir: outDir }),
+        });
+        const data = await resp.json();
+        state.savedPages = [];
+        renderCatalogTable();
+        fetchOutputDirectory();
+        if (navPageBadge) navPageBadge.textContent = "0";
+        showToast(`Cleared saved pages (${data.deleted_files || 0} files deleted)`, "success");
+      } catch (err) {
+        showToast(`Failed to clear saved pages: ${err.message}`, "error");
+      }
+    });
+  }
+
   // =========================================================================
   // Output Storage & Export
   // =========================================================================
   async function fetchOutputDirectory() {
-    const outDir = getSelectedOutputDir();
-    if (!outDir) {
-      if (outputFolderLabel) outputFolderLabel.textContent = "No folder selected";
-      if (outputFileList) outputFileList.innerHTML = '<p class="empty-hint">Choose a folder in Crawl Setup to view saved files.</p>';
-      return;
-    }
+    const outDir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
     if (outputFolderLabel) outputFolderLabel.textContent = outDir;
 
     const data = await fetchResultsData(outDir);
@@ -1829,11 +1908,7 @@
       return;
     }
 
-    const outDir = getSelectedOutputDir();
-    if (!outDir) {
-      showToast("Choose a folder with Browse before downloading files.", "warn");
-      return;
-    }
+    const outDir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
 
     const btns = [downloadZipBtn, downloadZipCatalogBtn].filter(Boolean);
     const origHtmls = btns.map((b) => b.innerHTML);
@@ -1899,11 +1974,7 @@
     const confirmed = confirm("Are you sure you want to delete all scraped files in the output directory?");
     if (!confirmed) return;
 
-    const outDir = getSelectedOutputDir();
-    if (!outDir) {
-      showToast("Choose a folder with Browse before clearing files.", "warn");
-      return;
-    }
+    const outDir = getSelectedOutputDir() || state.defaultOutputDir || "./output";
     try {
       const resp = await fetch("/api/results/clear", {
         method: "POST",
