@@ -49,9 +49,9 @@ dev = [
 website-scraper = "Backend.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/website-scraper"
-Issues = "https://github.com/yourusername/website-scraper/issues"
-Documentation = "https://github.com/yourusername/website-scraper#readme"
+Homepage = "https://github.com/Devansh-Kumar-Saini/Web-Scrapper"
+Issues = "https://github.com/Devansh-Kumar-Saini/Web-Scrapper/issues"
+Documentation = "https://github.com/Devansh-Kumar-Saini/Web-Scrapper#readme"
 
 [tool.setuptools]
 packages = ["Backend"]

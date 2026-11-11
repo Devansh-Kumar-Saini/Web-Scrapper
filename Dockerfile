@@ -1,26 +1,50 @@
+# syntax=docker/dockerfile:1
+
+# Playwright's browser download is pinned to a stable cache location so the
+# browser installed at build time is found again at runtime.
 FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="Website Scraper" \
+      org.opencontainers.image.description="Free, self-hosted website scraper with Markdown/JSON output, CLI, REST API and web UI." \
+      org.opencontainers.image.url="https://github.com/Devansh-Kumar-Saini/Web-Scrapper" \
+      org.opencontainers.image.source="https://github.com/Devansh-Kumar-Saini/Web-Scrapper" \
+      org.opencontainers.image.licenses="MIT"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    SCRAPER_CONTAINER=1 \
+    PORT=5000
 
 WORKDIR /app
 
-# Install system dependencies for Playwright
+# libatomic1 is required by the Node.js binary bundled with Playwright; the
+# python:slim base image does not include it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    gnupg \
-    ca-certificates \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies first so this layer is cached when only app code changes.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium browser and its system dependencies
-RUN playwright install --with-deps chromium
+# Chromium plus all the OS libraries it needs for JavaScript rendering.
+# Keep the apt lists cleanup in the same layer to reduce image size.
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
+# Copy the application code (see .dockerignore for what is excluded).
 COPY . .
 
-ENV PORT=5000
+# Output directory is created up front so a mounted volume has a writable target.
+RUN mkdir -p /app/output
+
 EXPOSE 5000
 
-# Run with Gunicorn (1 worker, 8 threads for SSE and scraping concurrency)
-CMD ["sh", "-c", "gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300"]
+# Container-friendly health check: the web server answering means the app is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)" || exit 1
+
+# One worker + threads keeps the in-memory job state and SSE streams consistent.
+CMD ["sh", "-c", "gunicorn wsgi:app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 300"]

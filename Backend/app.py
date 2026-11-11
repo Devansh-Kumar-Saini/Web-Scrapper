@@ -752,10 +752,16 @@ def static_files(path: str) -> Any:
 
 # --- REST API Endpoints ---
 
+@app.route("/api/health")
+def api_health() -> Any:
+    """Lightweight liveness probe used by Docker and container platforms."""
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/system/pick-folder", methods=["POST"])
 def api_pick_folder() -> Any:
     """Open the host machine's native folder picker and return the chosen path."""
-    if os.environ.get("RENDER") or os.environ.get("DYNO"):
+    if os.environ.get("RENDER") or os.environ.get("DYNO") or os.environ.get("SCRAPER_CONTAINER"):
         return jsonify({
             "is_cloud": True,
             "path": "./output",

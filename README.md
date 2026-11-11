@@ -35,6 +35,42 @@ Or install the project as a package (adds the `website-scraper` command):
 pip install -e .
 ```
 
+## Run with Docker
+
+No Python setup needed. The image bundles Python, all dependencies, and Chromium
+for JavaScript rendering. Build it from this folder:
+
+```bash
+docker build -t website-scraper .
+docker run -d --name website-scraper \
+  -p 5000:5000 \
+  -v "$(pwd)/output:/app/output" \
+  website-scraper
+```
+
+Open **`http://localhost:5000`**. Scraped files appear in `./output` on your machine.
+
+Prebuilt images are also published for Intel/AMD and Apple Silicon:
+
+```bash
+docker pull devansh-kumar-saini/website-scraper:latest   # Docker Hub
+docker pull ghcr.io/devansh-kumar-saini/web-scrapper:latest  # GitHub Container Registry
+```
+
+Run the CLI or Docker Compose:
+
+```bash
+# CLI inside the container
+docker run --rm -v "$(pwd)/output:/app/output" website-scraper \
+  python main.py --url https://example.com --format md --depth 1
+
+# Or with Docker Compose
+docker compose up -d --build
+```
+
+See [DOCKER.md](DOCKER.md) for the full guide, including how to publish your own
+free image and automate multi-architecture builds.
+
 ## Command-Line Interface (CLI)
 
 ```bash

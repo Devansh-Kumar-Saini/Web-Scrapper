@@ -1,0 +1,13 @@
+services:
+  website-scraper:
+    build: .
+    image: devansh-kumar-saini/website-scraper:latest
+    container_name: website-scraper
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+    volumes:
+      # Scraped files persist on the host in ./output
+      - ./output:/app/output
+    restart: unless-stopped
