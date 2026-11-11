@@ -25,6 +25,10 @@ def scrape_url(
     respect_robots: bool = True,
     chunk_size: int = 0,
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
+    extract_media: bool = False,
+    download_media: bool = False,
+    media_types: set[str] | list[str] | None = None,
+    output_dir: str | None = None,
     impersonate: str | bool | None = None,
     proxy: str | None = None,
     delay: float = 0.0,
@@ -68,7 +72,29 @@ def scrape_url(
             schema=schema,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            extract_media=extract_media,
+            media_types=media_types,
         )
+        if download_media and output_dir and document.media:
+            try:
+                from .media import MediaItem, download_media_file
+            except ImportError:
+                from media import MediaItem, download_media_file
+            from pathlib import Path
+            out_p = Path(output_dir)
+            for m_dict in document.media:
+                m_item = MediaItem(
+                    page_url=m_dict.get("page_url", final_url),
+                    media_type=m_dict.get("media_type", "image"),
+                    media_url=m_dict.get("media_url", ""),
+                    filename=m_dict.get("filename", ""),
+                    extension=m_dict.get("extension", ""),
+                    alt=m_dict.get("alt", ""),
+                )
+                if download_media_file(m_item, out_p, session=fetcher.session):
+                    m_dict["downloaded_path"] = m_item.downloaded_path
+                    m_dict["download_status"] = m_item.download_status
+                    m_dict["size_bytes"] = m_item.size_bytes
         document.status_code = result.status_code
         return document
     finally:

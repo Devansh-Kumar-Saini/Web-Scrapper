@@ -17,6 +17,7 @@ try:
     from .crawler import Crawler
     from .extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, parse_schema, validate_selectors
     from .filters import parse_patterns, parse_selectors
+    from .media import MediaCollector, parse_media_types
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .webhook import notify, validate_webhook_url
     from .writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from crawler import Crawler
     from extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, parse_schema, validate_selectors
     from filters import parse_patterns, parse_selectors
+    from media import MediaCollector, parse_media_types
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from webhook import notify, validate_webhook_url
     from writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
@@ -200,6 +202,35 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Explicit sitemap.xml URL to crawl",
+    )
+    parser.add_argument(
+        "--extract-media",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Extract media links (images, pdf, docs, ppt, video) into media_manifest.json and media_manifest.csv",
+    )
+    parser.add_argument(
+        "--media-mode",
+        choices=["both", "media-only"],
+        default="both",
+        help="Output mode when media extraction is enabled: 'both' (scraped pages + media) or 'media-only' (only media manifest)",
+    )
+    parser.add_argument(
+        "--media-only",
+        action="store_true",
+        default=False,
+        help="Shortcut for --extract-media --media-mode media-only (only save media, skip page text files)",
+    )
+    parser.add_argument(
+        "--download-media",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Download discovered media files locally to <output-dir>/media/<category>/",
+    )
+    parser.add_argument(
+        "--media-types",
+        default=None,
+        help="Comma-separated media types to extract (choices: image, pdf, doc, ppt, video; default: all)",
     )
     parser.add_argument(
         "--stdout",
@@ -402,7 +433,22 @@ def run(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     started_iso = datetime.now(timezone.utc).isoformat()
-    writer = OutputWriter(args.output_dir, args.format)
+    media_only_flag = bool(getattr(args, "media_only", False))
+    download_media_flag = bool(getattr(args, "download_media", False))
+    extract_media_flag = bool(getattr(args, "extract_media", False)) or media_only_flag or download_media_flag
+    media_mode = "media-only" if media_only_flag else getattr(args, "media_mode", "both")
+    media_only = (media_mode == "media-only")
+    media_types_set = parse_media_types(getattr(args, "media_types", None))
+
+    writer = OutputWriter(args.output_dir, args.format, media_only=media_only)
+    media_collector = None
+    if extract_media_flag:
+        media_collector = MediaCollector(
+            allowed_types=media_types_set,
+            download=download_media_flag,
+            session=None,
+            logger=logger,
+        )
     crawler = Crawler(
         args.depth,
         args.max_pages,
@@ -424,6 +470,9 @@ def run(args: argparse.Namespace) -> int:
     collected_depths: list[int] = []
     saved_pages_meta: list[dict[str, Any]] = []
     try:
+        if media_collector is not None:
+            media_collector.session = crawler.fetcher.session
+
         for page in crawler.crawl(urls):
             crawled += 1
             try:
@@ -435,11 +484,22 @@ def run(args: argparse.Namespace) -> int:
                     schema=schema_spec,
                     chunk_size=args.chunk_size,
                     chunk_overlap=args.chunk_overlap,
+                    extract_media=extract_media_flag,
+                    media_types=media_types_set,
                 )
             except Exception as exc:
                 failed += 1
                 logger.warning("Extraction failed for %s: %s", page.url, exc)
                 continue
+
+            if media_collector is not None:
+                new_media = media_collector.add_page_media(
+                    page.url,
+                    page.html,
+                    output_dir=output if download_media_flag else None,
+                )
+                if not is_piped and new_media:
+                    print(f"  [media] extracted {len(new_media)} media file(s) from {page.url}")
 
             if is_piped:
                 collected_documents.append(document)
@@ -455,26 +515,35 @@ def run(args: argparse.Namespace) -> int:
                         print("\n---\n")
                     print(content)
 
-            filename = writer.save_document(document, page.depth)
-            saved += 1
-            try:
-                size_bytes = (output / filename).stat().st_size
-            except OSError:
-                size_bytes = 0
-            saved_pages_meta.append({
-                "url": document.url,
-                "title": document.title,
-                "file": filename,
-                "depth": page.depth,
-                "bytes": size_bytes,
-                "format": args.format,
-            })
-            if not is_piped:
-                print(f"[depth {page.depth}] saving {page.url} -> {output / filename}")
+            if not media_only:
+                filename = writer.save_document(document, page.depth)
+                saved += 1
+                try:
+                    size_bytes = (output / filename).stat().st_size if filename else 0
+                except OSError:
+                    size_bytes = 0
+                saved_pages_meta.append({
+                    "url": document.url,
+                    "title": document.title,
+                    "file": filename,
+                    "depth": page.depth,
+                    "bytes": size_bytes,
+                    "format": args.format,
+                })
+                if not is_piped:
+                    print(f"[depth {page.depth}] saving {page.url} -> {output / filename}")
+                else:
+                    sys.stderr.write(f"[depth {page.depth}] saved {page.url}\n")
             else:
-                sys.stderr.write(f"[depth {page.depth}] saved {page.url}\n")
+                writer.save_document(document, page.depth)
+                if not is_piped:
+                    print(f"[depth {page.depth}] scanned {page.url} (media-only mode)")
     finally:
         writer.finalize()
+        if media_collector is not None:
+            json_m, csv_m = media_collector.write_manifests(output)
+            if not is_piped:
+                print(f"  [media] saved manifests -> {json_m.name}, {csv_m.name}")
 
     if getattr(args, "json", False) or (getattr(args, "stdout", False) and args.format == "json"):
         if len(collected_documents) == 1:
@@ -495,9 +564,13 @@ def run(args: argparse.Namespace) -> int:
     elapsed = time.monotonic() - started
     skipped = len(crawler.skipped_reasons) + len(invalid)
     files_written = len(writer.written_files) + 1
+    media_stats = media_collector.get_summary() if media_collector else None
+    media_info_str = ""
+    if media_stats:
+        media_info_str = f", media found={media_stats['total_media']}, media downloaded={media_stats['downloaded']}"
     summary_msg = (
         f"\nSummary: pages crawled={crawled}, pages saved={saved}, pages failed={failed}, "
-        f"pages skipped={skipped}, files written={files_written}, format={args.format}, elapsed={elapsed:.2f}s"
+        f"pages skipped={skipped}, files written={files_written}, format={args.format}{media_info_str}, elapsed={elapsed:.2f}s"
     )
     if is_piped:
         sys.stderr.write(summary_msg + "\n")

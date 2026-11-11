@@ -99,6 +99,23 @@
                 <span class="link-label">URL Inspector</span>
               </button>
             </li>
+
+            <li>
+              <button type="button" class="nav-link" data-view="viewMediaExtractor"
+                      data-title="Media Extractor"
+                      data-category="Engine"
+                      data-subtitle="Extract and download images, PDFs, docs, presentations, and videos.">
+                <span class="link-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                    <circle cx="9" cy="9" r="2"/>
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                  </svg>
+                </span>
+                <span class="link-label">Media Extractor</span>
+                <span id="navMediaBadge" class="nav-counter" style="display:none;">0</span>
+              </button>
+            </li>
           </ul>
         </div>
 
@@ -870,6 +887,135 @@
         </section>
 
         <!-- ==========================================
+             VIEW: MEDIA EXTRACTOR
+             ========================================== -->
+        <section id="viewMediaExtractor" class="content-view">
+          <div class="view-container">
+            <div class="form-layout-grid">
+              <!-- Master Toggle & Mode Card -->
+              <div class="card card-wide">
+                <div class="card-header">
+                  <div>
+                    <h2 class="card-title">Media Extractor Settings</h2>
+                    <p class="card-subtitle">Extract, catalog, and download media files (images, PDFs, docs, presentations, videos).</p>
+                  </div>
+                  <label class="switch-control" for="enableMediaExtractor" title="Toggle Media Extractor on or off">
+                    <input type="checkbox" id="enableMediaExtractor" role="switch" />
+                    <span class="switch-track"></span>
+                    <span class="switch-label">Enable</span>
+                  </label>
+                </div>
+                <div class="card-body" id="mediaExtractorBody">
+                  <div class="form-group">
+                    <label class="form-label">Extraction Scope</label>
+                    <div class="media-mode-cards">
+                      <label class="media-mode-card active" id="labelModeBoth">
+                        <input type="radio" name="mediaModeOption" value="both" checked />
+                        <div class="mode-card-content">
+                          <span class="mode-card-title">With Web Scraping</span>
+                          <span class="mode-card-desc">Save regular text/markdown/JSON documents <strong>plus</strong> the dedicated media manifest.</span>
+                        </div>
+                      </label>
+                      <label class="media-mode-card" id="labelModeOnly">
+                        <input type="radio" name="mediaModeOption" value="media-only" />
+                        <div class="mode-card-content">
+                          <span class="mode-card-title">Media Only</span>
+                          <span class="mode-card-desc">Extract <strong>only media assets</strong> into manifests (skips saving web page text/markdown files).</span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="form-group" style="margin-top: 18px;">
+                    <label class="checkbox-control" for="downloadMediaFiles">
+                      <input type="checkbox" id="downloadMediaFiles" />
+                      <span class="checkbox-box"></span>
+                      <div class="checkbox-text">
+                        <span class="checkbox-title">Download Media Files Locally</span>
+                        <span class="checkbox-desc">Download discovered media assets directly to disk inside <code>output/media/&lt;category&gt;/</code></span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Supported Media Categories Card -->
+              <div class="card card-wide">
+                <div class="card-header">
+                  <div>
+                    <h2 class="card-title">Supported Media Categories</h2>
+                    <p class="card-subtitle">Select which media file types to extract from pages.</p>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="media-type-grid">
+                    <label class="media-type-item">
+                      <input type="checkbox" id="mediaTypeImage" value="image" checked />
+                      <span class="type-badge badge-image">Images</span>
+                      <span class="type-extensions">.png, .jpg, .jpeg, .webp, .svg, .gif, .avif, &lt;img&gt;, &lt;picture&gt;</span>
+                    </label>
+                    <label class="media-type-item">
+                      <input type="checkbox" id="mediaTypePdf" value="pdf" checked />
+                      <span class="type-badge badge-pdf">PDF</span>
+                      <span class="type-extensions">.pdf documents &amp; embedded PDF viewers</span>
+                    </label>
+                    <label class="media-type-item">
+                      <input type="checkbox" id="mediaTypeDoc" value="doc" checked />
+                      <span class="type-badge badge-doc">Docs</span>
+                      <span class="type-extensions">.doc, .docx, .odt, .rtf, .pages documents</span>
+                    </label>
+                    <label class="media-type-item">
+                      <input type="checkbox" id="mediaTypePpt" value="ppt" checked />
+                      <span class="type-badge badge-ppt">Presentations</span>
+                      <span class="type-extensions">.ppt, .pptx, .odp, .key slide decks</span>
+                    </label>
+                    <label class="media-type-item">
+                      <input type="checkbox" id="mediaTypeVideo" value="video" checked />
+                      <span class="type-badge badge-video">Videos</span>
+                      <span class="type-extensions">.mp4, .webm, .ogg, .mov, .avi, &lt;video&gt;, &lt;source&gt;</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Discovered Media Explorer -->
+              <div class="card card-wide table-card">
+                <div class="card-header table-header">
+                  <div class="table-search-wrap">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="mediaSearchInput" class="custom-input table-search" placeholder="Filter media by URL, filename, or source page..." />
+                  </div>
+                  <div class="table-meta">
+                    <span class="meta-label">Total Discovered: <strong id="mediaTotalCount">0</strong></span>
+                    <button type="button" id="refreshMediaBtn" class="btn btn-secondary btn-sm">Refresh</button>
+                  </div>
+                </div>
+                <div class="table-scroll-container">
+                  <table class="data-table" aria-label="Discovered media catalog">
+                    <thead>
+                      <tr>
+                        <th scope="col" style="width: 12%;">Type</th>
+                        <th scope="col" style="width: 38%;">Media Asset Link</th>
+                        <th scope="col" style="width: 32%;">Found On Page</th>
+                        <th scope="col" style="width: 10%;">Status</th>
+                        <th scope="col" style="width: 8%; text-align: right;">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="mediaTableBody">
+                      <tr>
+                        <td colspan="5" class="empty-state">No media assets discovered yet. Enable Media Extractor and run a crawl.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==========================================
              VIEW 5: LIVE MONITOR & CONSOLE
              ========================================== -->
         <section id="viewMonitor" class="content-view">
@@ -906,6 +1052,22 @@
                 </div>
                 <div class="telemetry-val text-accent" id="monitorElapsedVal">0.0s</div>
                 <div class="telemetry-sub">Job active duration</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Media Found</span>
+                </div>
+                <div class="telemetry-val text-accent" id="monitorMediaFoundVal">0</div>
+                <div class="telemetry-sub">Discovered assets</div>
+              </div>
+
+              <div class="telemetry-card">
+                <div class="telemetry-head">
+                  <span class="telemetry-label">Media Downloaded</span>
+                </div>
+                <div class="telemetry-val text-green" id="monitorMediaDownloadedVal">0</div>
+                <div class="telemetry-sub">Saved locally to disk</div>
               </div>
 
               <div class="telemetry-card telemetry-card-velocity">

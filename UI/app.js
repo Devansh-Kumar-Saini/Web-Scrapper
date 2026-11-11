@@ -32,6 +32,8 @@
     catalogRenderLimit: 100,
     isContainer: false,
     defaultOutputDir: "./output",
+    discoveredMedia: [],
+    mediaFilter: "",
   };
 
   // --- DOM Element References ---
@@ -767,6 +769,17 @@
     }
     const schema = schemaField.value;
 
+    const enableMedia = document.getElementById("enableMediaExtractor")?.checked || false;
+    const mediaModeEl = document.querySelector('input[name="mediaModeOption"]:checked');
+    const mediaMode = mediaModeEl ? mediaModeEl.value : "both";
+    const downloadMedia = document.getElementById("downloadMediaFiles")?.checked || false;
+    const mediaTypes = [];
+    if (document.getElementById("mediaTypeImage")?.checked) mediaTypes.push("image");
+    if (document.getElementById("mediaTypePdf")?.checked) mediaTypes.push("pdf");
+    if (document.getElementById("mediaTypeDoc")?.checked) mediaTypes.push("doc");
+    if (document.getElementById("mediaTypePpt")?.checked) mediaTypes.push("ppt");
+    if (document.getElementById("mediaTypeVideo")?.checked) mediaTypes.push("video");
+
     // Disable start buttons, show loading state
     setLaunchState(true);
 
@@ -798,6 +811,10 @@
           impersonate,
           proxy,
           webhook_url: webhookUrl,
+          extract_media: enableMedia,
+          media_mode: mediaMode,
+          download_media: downloadMedia,
+          media_types: mediaTypes,
         }),
       });
 
@@ -1125,6 +1142,17 @@
       }
     });
 
+    state.eventSource.addEventListener("media_found", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.items && Array.isArray(data.items)) {
+          addDiscoveredMedia(data.items);
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE media_found:", err);
+      }
+    });
+
     state.eventSource.addEventListener("reset", () => {
       clearAllClientData();
     });
@@ -1154,6 +1182,10 @@
       addSavedPagesBatch(snap.recent_pages);
     }
 
+    if (snap.recent_media && Array.isArray(snap.recent_media) && snap.recent_media.length > 0) {
+      addDiscoveredMedia(snap.recent_media);
+    }
+
     updateStatus(snap.status || "idle", snap.error_message, Boolean(snap.dry_run));
   }
 
@@ -1173,6 +1205,20 @@
     if (monitorSkippedVal) monitorSkippedVal.textContent = snap.pages_skipped ?? 0;
     if (monitorElapsedVal) {
       monitorElapsedVal.textContent = `${elapsed}s`;
+    }
+    const mediaFoundEl = document.getElementById("monitorMediaFoundVal");
+    if (mediaFoundEl && snap.media_extracted !== undefined) {
+      mediaFoundEl.textContent = snap.media_extracted;
+    }
+    const mediaDownloadedEl = document.getElementById("monitorMediaDownloadedVal");
+    if (mediaDownloadedEl && snap.media_downloaded !== undefined) {
+      mediaDownloadedEl.textContent = snap.media_downloaded;
+    }
+    const navMediaBadge = document.getElementById("navMediaBadge");
+    if (navMediaBadge) {
+      const count = snap.media_extracted ?? state.discoveredMedia.length;
+      navMediaBadge.textContent = count;
+      navMediaBadge.style.display = count > 0 ? "inline-block" : "none";
     }
     updateVelocityDisplay();
 
@@ -2254,6 +2300,152 @@
   });
 
   // =========================================================================
+  // Media Extractor UI Logic
+  // =========================================================================
+  function addDiscoveredMedia(items) {
+    if (!items || !items.length) return;
+    const seen = new Set(state.discoveredMedia.map((m) => m.media_url));
+    for (const item of items) {
+      if (!seen.has(item.media_url)) {
+        seen.add(item.media_url);
+        state.discoveredMedia.unshift(item);
+      }
+    }
+    if (state.discoveredMedia.length > 500) {
+      state.discoveredMedia = state.discoveredMedia.slice(0, 500);
+    }
+    const navMediaBadge = document.getElementById("navMediaBadge");
+    if (navMediaBadge) {
+      navMediaBadge.textContent = state.discoveredMedia.length;
+      navMediaBadge.style.display = state.discoveredMedia.length > 0 ? "inline-block" : "none";
+    }
+    const totalCountEl = document.getElementById("mediaTotalCount");
+    if (totalCountEl) totalCountEl.textContent = state.discoveredMedia.length;
+    renderMediaTable();
+  }
+
+  function getBadgeClassForType(type) {
+    switch ((type || "").toLowerCase()) {
+      case "image": return "badge-image";
+      case "pdf": return "badge-pdf";
+      case "doc": return "badge-doc";
+      case "ppt": return "badge-ppt";
+      case "video": return "badge-video";
+      default: return "";
+    }
+  }
+
+  function renderMediaTable() {
+    const tableBody = document.getElementById("mediaTableBody");
+    if (!tableBody) return;
+
+    const filter = (state.mediaFilter || "").toLowerCase().trim();
+    const filtered = state.discoveredMedia.filter((m) => {
+      if (!filter) return true;
+      return (
+        (m.media_url && m.media_url.toLowerCase().includes(filter)) ||
+        (m.filename && m.filename.toLowerCase().includes(filter)) ||
+        (m.page_url && m.page_url.toLowerCase().includes(filter)) ||
+        (m.media_type && m.media_type.toLowerCase().includes(filter))
+      );
+    });
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `
+        <tr>
+          <td colspan="5" class="empty-state">
+            ${filter ? "No media assets matched your search filter." : "No media assets discovered yet. Enable Media Extractor and run a crawl."}
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tableBody.innerHTML = filtered.map((m) => {
+      const typeBadge = `<span class="type-badge ${getBadgeClassForType(m.media_type)}">${escapeHtml(m.media_type || "asset")}</span>`;
+      const urlText = escapeHtml(m.media_url || "");
+      const pageText = escapeHtml(m.page_url || "");
+      const filename = escapeHtml(m.filename || "file");
+      const statusClass = m.download_status === "downloaded" ? "media-status-downloaded" : (m.download_status === "failed" ? "media-status-failed" : "media-status-discovered");
+      const statusLabel = m.download_status || "Discovered";
+
+      return `
+        <tr>
+          <td>${typeBadge}</td>
+          <td class="media-url-cell">
+            <a href="${urlText}" target="_blank" rel="noopener noreferrer" class="media-url-link" title="${urlText}">
+              ${filename}
+            </a>
+            <div style="font-size: 10.5px; color: var(--text-muted); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${urlText}</div>
+          </td>
+          <td class="media-url-cell">
+            <a href="${pageText}" target="_blank" rel="noopener noreferrer" style="color: var(--text-secondary); text-decoration: none; font-size: 11px;" title="${pageText}">
+              ${pageText}
+            </a>
+          </td>
+          <td><span class="media-status-badge ${statusClass}">${statusLabel}</span></td>
+          <td style="text-align: right;">
+            <button type="button" class="btn btn-secondary btn-sm copy-media-url-btn" data-url="${urlText}" title="Copy media link">Copy</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function fetchMediaCatalog() {
+    try {
+      const dir = getSelectedOutputDir();
+      const resp = await fetch(`/api/media?output_dir=${encodeURIComponent(dir)}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.media && Array.isArray(data.media)) {
+        addDiscoveredMedia(data.media);
+      }
+    } catch (err) {
+      console.warn("Could not fetch media catalog:", err);
+    }
+  }
+
+  function initMediaExtractor() {
+    const modeRadios = document.querySelectorAll('input[name="mediaModeOption"]');
+    modeRadios.forEach((r) => {
+      r.addEventListener("change", () => {
+        document.querySelectorAll(".media-mode-card").forEach((card) => {
+          card.classList.toggle("active", card.contains(r) && r.checked);
+        });
+      });
+    });
+
+    const searchInput = document.getElementById("mediaSearchInput");
+    if (searchInput) {
+      searchInput.addEventListener("input", (e) => {
+        state.mediaFilter = e.target.value;
+        renderMediaTable();
+      });
+    }
+
+    const refreshBtn = document.getElementById("refreshMediaBtn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", () => {
+        fetchMediaCatalog();
+        showToast("Refreshed media catalog", "info");
+      });
+    }
+
+    const tableBody = document.getElementById("mediaTableBody");
+    if (tableBody) {
+      tableBody.addEventListener("click", (e) => {
+        const copyBtn = e.target.closest(".copy-media-url-btn");
+        if (copyBtn && copyBtn.dataset.url) {
+          navigator.clipboard.writeText(copyBtn.dataset.url).then(() => {
+            showToast("Copied media URL to clipboard", "success");
+          });
+        }
+      });
+    }
+  }
+
+  // =========================================================================
   // App Bootstrapping
   // =========================================================================
   async function initEnvironment() {
@@ -2282,9 +2474,11 @@
 
   initTheme();
   initSidebarState();
+  initMediaExtractor();
   updateSetupSummary();
   initEnvironment().finally(() => {
     fetchSavedPages();
+    fetchMediaCatalog();
     fetchOutputDirectory();
     initSSE();
   });

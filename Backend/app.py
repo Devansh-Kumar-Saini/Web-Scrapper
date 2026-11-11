@@ -28,6 +28,7 @@ try:
     from .extractor import extract_structured, parse_schema, validate_selectors
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import parse_patterns, parse_selectors
+    from .media import MEDIA_CATEGORIES, MediaCollector, parse_media_types
     from .scraper import scrape_url
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -40,6 +41,7 @@ except ImportError:
     from extractor import extract_structured, parse_schema, validate_selectors
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from filters import parse_patterns, parse_selectors
+    from media import MEDIA_CATEGORIES, MediaCollector, parse_media_types
     from scraper import scrape_url
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -217,6 +219,13 @@ class JobState:
     render_js: bool = False
     dry_run: bool = False
     webhook_url: str = ""
+    extract_media: bool = False
+    media_mode: str = "both"
+    download_media: bool = False
+    media_types: list[str] = field(default_factory=lambda: list(MEDIA_CATEGORIES))
+    media_extracted: int = 0
+    media_downloaded: int = 0
+    recent_media: list[dict[str, Any]] = field(default_factory=list)
     discovered_urls: list[str] = field(default_factory=list)
     started_at: float | None = None
     finished_at: float | None = None
@@ -315,6 +324,8 @@ class JobManager:
                 "pages_crawled": self.state.pages_crawled,
                 "pages_saved": self.state.pages_saved,
                 "pages_skipped": self.state.pages_skipped,
+                "media_extracted": self.state.media_extracted,
+                "media_downloaded": self.state.media_downloaded,
                 "elapsed_seconds": round(elapsed, 2),
                 "current_url": self.state.current_url,
                 "current_depth": self.state.current_depth,
@@ -441,6 +452,10 @@ class JobManager:
         dry_run: bool = False,
         webhook_url: str = "",
         schema: dict[str, Any] | None = None,
+        extract_media: bool = False,
+        media_mode: str = "both",
+        download_media: bool = False,
+        media_types: list[str] | None = None,
     ) -> tuple[bool, str]:
         with self.lock:
             if self.state.status in {"running", "stopping"}:
@@ -472,6 +487,10 @@ class JobManager:
                 render_js=render_js,
                 dry_run=dry_run,
                 webhook_url=webhook_url or "",
+                extract_media=extract_media,
+                media_mode=media_mode,
+                download_media=download_media,
+                media_types=media_types or list(MEDIA_CATEGORIES),
                 started_at=time.monotonic(),
                 started_at_iso=datetime.now(timezone.utc).isoformat(),
             )
@@ -502,6 +521,10 @@ class JobManager:
                 dry_run,
                 webhook_url or "",
                 dict(schema or {}),
+                extract_media,
+                media_mode,
+                download_media,
+                media_types,
             ),
             daemon=True,
         )
@@ -545,6 +568,10 @@ class JobManager:
         dry_run: bool = False,
         webhook_url: str = "",
         schema: dict[str, Any] | None = None,
+        extract_media: bool = False,
+        media_mode: str = "both",
+        download_media: bool = False,
+        media_types: list[str] | None = None,
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -583,6 +610,22 @@ class JobManager:
         if webhook_url:
             self.log("INFO", f"Webhook callback configured: {webhook_url}")
 
+        media_only = (media_mode == "media-only")
+        media_collector = None
+        if extract_media:
+            allowed_t = parse_media_types(media_types)
+            media_collector = MediaCollector(
+                allowed_types=allowed_t,
+                download=download_media,
+                session=None,
+                logger=logger,
+            )
+            self.log(
+                "INFO",
+                f"Media Extractor active: mode={media_mode}, download={download_media}, "
+                f"types={', '.join(sorted(allowed_t))}",
+            )
+
         def _extract_page(page_url: str, page_html: str, page_depth: int) -> Any:
             return extract_structured(
                 page_html,
@@ -592,9 +635,11 @@ class JobManager:
                 schema=schema,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
+                extract_media=extract_media,
+                media_types=media_types,
             )
 
-        writer = OutputWriter(str(out_path), output_format=output_format)
+        writer = OutputWriter(str(out_path), output_format=output_format, media_only=media_only)
         crawler = Crawler(
             max_depth=depth,
             max_pages=max_pages,
@@ -675,6 +720,9 @@ class JobManager:
                 return
 
             try:
+                if media_collector is not None:
+                    media_collector.session = crawler.fetcher.session
+
                 for page in crawler.crawl(urls):
                     if self.stop_event.is_set():
                         break
@@ -694,37 +742,71 @@ class JobManager:
                                 exclude_selectors=exclude_selectors,
                                 chunk_size=chunk_size,
                                 chunk_overlap=chunk_overlap,
+                                extract_media=extract_media,
+                                media_types=media_types,
                             )
                         except Exception as exc:
                             crawler.skipped_reasons.append(f"extraction failure: {page.url}")
                             self.log("WARN", f"Extraction failed for {page.url}: {exc}")
                             continue
 
-                    filename = writer.save_document(document, page.depth)
-                    title = document.title
-                    file_size = (out_path / filename).stat().st_size
+                    if media_collector is not None:
+                        new_media = media_collector.add_page_media(
+                            page.url,
+                            page.html,
+                            output_dir=out_path if download_media else None,
+                        )
+                        if new_media:
+                            with self.lock:
+                                self.state.media_extracted = len(media_collector.items)
+                                self.state.media_downloaded = media_collector.downloaded_count
+                                for m_item in new_media:
+                                    self.state.recent_media.append(m_item.to_dict())
+                                    if len(self.state.recent_media) > 300:
+                                        self.state.recent_media.pop(0)
+                            self.log("INFO", f"[depth {page.depth}] Found {len(new_media)} media file(s) on {page.url}")
+                            self.broadcast("media_found", {
+                                "page_url": page.url,
+                                "count": len(new_media),
+                                "items": [m.to_dict() for m in new_media],
+                            })
+                            self.broadcast("stats", self.get_stats())
 
-                    page_info = {
-                        "file": filename,
-                        "url": page.url,
-                        "title": title,
-                        "depth": page.depth,
-                        "bytes": file_size,
-                        "format": output_format,
-                        "saved_at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                    }
+                    if media_only:
+                        writer.save_document(document, page.depth)
+                        with self.lock:
+                            self.state.pages_saved += 1
+                        self.log("INFO", f"[depth {page.depth}] Scanned {page.url} (media-only mode)")
+                        self.broadcast("stats", self.get_stats())
+                    else:
+                        filename = writer.save_document(document, page.depth)
+                        title = document.title
+                        file_size = (out_path / filename).stat().st_size if filename else 0
 
-                    with self.lock:
-                        self.state.pages_saved += 1
-                        self.state.recent_pages.append(page_info)
-                        if len(self.state.recent_pages) > 300:
-                            self.state.recent_pages.pop(0)
+                        page_info = {
+                            "file": filename,
+                            "url": page.url,
+                            "title": title,
+                            "depth": page.depth,
+                            "bytes": file_size,
+                            "format": output_format,
+                            "saved_at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                        }
 
-                    self.log("INFO", f"[depth {page.depth}] Saved {page.url} -> {filename} ({file_size} bytes)")
-                    self.broadcast("page_saved", page_info)
-                    self.broadcast("stats", self.get_stats())
+                        with self.lock:
+                            self.state.pages_saved += 1
+                            self.state.recent_pages.append(page_info)
+                            if len(self.state.recent_pages) > 300:
+                                self.state.recent_pages.pop(0)
+
+                        self.log("INFO", f"[depth {page.depth}] Saved {page.url} -> {filename} ({file_size} bytes)")
+                        self.broadcast("page_saved", page_info)
+                        self.broadcast("stats", self.get_stats())
             finally:
                 writer.finalize()
+                if media_collector is not None:
+                    json_m, csv_m = media_collector.write_manifests(out_path)
+                    self.log("INFO", f"Media manifests saved to {json_m.name} and {csv_m.name}")
 
             stopped = self.stop_event.is_set()
             saved_count = 0
@@ -906,6 +988,8 @@ def api_scrape() -> Any:
             respect_robots=_as_bool(data.get("respect_robots"), True),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            extract_media=_as_bool(data.get("extract_media"), False),
+            media_types=data.get("media_types"),
             impersonate=impersonate,
             proxy=proxy,
             delay=delay,
@@ -1021,6 +1105,13 @@ def api_scrape_start() -> Any:
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    extract_media = _as_bool(data.get("extract_media"), False)
+    media_mode = str(data.get("media_mode") or "both").strip().lower()
+    if media_mode not in {"both", "media-only"}:
+        media_mode = "both"
+    download_media = _as_bool(data.get("download_media"), False)
+    media_types = data.get("media_types")
+
     started, msg = job_manager.start_crawl(
         urls=valid_urls,
         depth=depth,
@@ -1045,6 +1136,10 @@ def api_scrape_start() -> Any:
         dry_run=dry_run,
         webhook_url=webhook_url,
         schema=schema_spec,
+        extract_media=extract_media,
+        media_mode=media_mode,
+        download_media=download_media,
+        media_types=media_types,
     )
 
     if not started:
@@ -1078,6 +1173,10 @@ def api_scrape_start() -> Any:
             "render_js": render_js,
             "dry_run": dry_run,
             "webhook_url": webhook_url,
+            "extract_media": extract_media,
+            "media_mode": media_mode,
+            "download_media": download_media,
+            "media_types": media_types,
         },
     })
 
@@ -1222,6 +1321,31 @@ def api_results_file() -> Any:
         })
     except Exception as exc:
         return jsonify({"error": f"Failed to read file: {exc}"}), 500
+
+
+@app.route("/api/media", methods=["GET"])
+def api_media() -> Any:
+    out_path = _resolve_output_dir(request.args.get("output_dir", "./output"))
+    media_file = out_path / "media_manifest.json"
+    media_items: list[dict[str, Any]] = []
+    if media_file.is_file():
+        try:
+            parsed = json.loads(media_file.read_text(encoding="utf-8"))
+            if isinstance(parsed, list):
+                media_items = parsed
+        except Exception:
+            media_items = []
+
+    # Also include in-memory recent media from active/completed job if relevant
+    with job_manager.lock:
+        if not media_items and job_manager.state.recent_media:
+            media_items = list(job_manager.state.recent_media)
+
+    return jsonify({
+        "output_dir": str(out_path),
+        "total_media": len(media_items),
+        "media": media_items,
+    })
 
 
 @app.route("/api/results/download", methods=["GET"])

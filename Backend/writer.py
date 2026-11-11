@@ -109,8 +109,9 @@ def _yaml_value(value: str) -> str:
 
 
 class OutputWriter:
-    def __init__(self, output_dir: str, output_format: str = "txt") -> None:
+    def __init__(self, output_dir: str, output_format: str = "txt", media_only: bool = False) -> None:
         self.output_format = (output_format or "txt").lower().strip()
+        self.media_only = bool(media_only)
         if self.output_format not in OUTPUT_FORMATS:
             raise ValueError(
                 f"Unsupported output format '{output_format}'. Choose one of: {', '.join(OUTPUT_FORMATS)}"
@@ -197,6 +198,11 @@ class OutputWriter:
             "title": document.title,
             "depth": depth,
         }
+        if self.media_only:
+            entry["mode"] = "media_only"
+            self.manifest.append(entry)
+            return ""
+
         if self.output_format != "txt":
             entry["format"] = self.output_format
         byte_count = 0

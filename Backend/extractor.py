@@ -48,6 +48,7 @@ class PageContent:
     headings: list[str] = field(default_factory=list)
     chunks: list[str] = field(default_factory=list)
     schema: dict[str, Any] = field(default_factory=dict)
+    media: list[dict[str, Any]] = field(default_factory=list)
     word_count: int = 0
     status_code: int = 0
     selector_matched: bool = True
@@ -68,6 +69,7 @@ class PageContent:
             "headings": self.headings,
             "chunks": self.chunks,
             "schema": self.schema,
+            "media": self.media,
             "word_count": self.word_count,
             "status_code": self.status_code,
             "selector_matched": self.selector_matched,
@@ -552,13 +554,16 @@ def extract_structured(
     chunk_size: int = 0,
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
     schema: dict[str, Any] | str | None = None,
+    extract_media: bool = False,
+    media_types: set[str] | list[str] | None = None,
 ) -> PageContent:
-    """Extract text, Markdown, metadata, links, images, and headings.
+    """Extract text, Markdown, metadata, links, images, headings, and optional media.
 
     ``target_selector`` limits extraction to the first matching CSS or XPath
     selector. ``exclude_selectors`` strips matching elements (ads, cookie
     banners, sidebars) before extraction. ``chunk_size`` > 0 also produces
     overlapping ``chunks``. ``schema`` maps custom field names to selectors.
+    ``extract_media`` discovers images, PDFs, docs, presentations, and videos.
     """
     schema_spec = parse_schema(schema)
     soup = BeautifulSoup(html, "lxml")
@@ -593,6 +598,16 @@ def extract_structured(
     chunk_source = markdown or text
     chunks = chunk_text(chunk_source, chunk_size, chunk_overlap) if chunk_size > 0 else []
 
+    media_list: list[dict[str, Any]] = []
+    if extract_media:
+        try:
+            from .media import extract_media_from_html, parse_media_types
+        except ImportError:
+            from media import extract_media_from_html, parse_media_types
+        allowed = parse_media_types(media_types)
+        media_items = extract_media_from_html(html, page_url=url, allowed_types=allowed)
+        media_list = [item.to_dict() for item in media_items]
+
     return PageContent(
         url=url,
         title=metadata["title"],
@@ -608,6 +623,7 @@ def extract_structured(
         headings=headings,
         chunks=chunks,
         schema=schema_values,
+        media=media_list,
         word_count=len(text.split()),
         selector_matched=selector_matched,
     )

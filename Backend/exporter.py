@@ -12,6 +12,7 @@ import csv
 import io
 import json
 import re
+import shutil
 import sqlite3
 import zipfile
 from dataclasses import fields
@@ -330,4 +331,13 @@ def build_results_zip(output_dir: Path, target_format: str | None = None) -> byt
                 depth = 0
             writer.save_document(_to_page_content(record), depth)
         writer.finalize()
+
+        media_dir = output_dir / "media"
+        if media_dir.is_dir():
+            shutil.copytree(media_dir, export_dir / "media", dirs_exist_ok=True)
+        for manifest_name in ("media_manifest.json", "media_manifest.csv"):
+            src_m = output_dir / manifest_name
+            if src_m.is_file():
+                shutil.copy2(src_m, export_dir / manifest_name)
+
         return _zip_paths(export_dir, [path for path in export_dir.rglob("*") if path.is_file()])

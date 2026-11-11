@@ -17,6 +17,7 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 - **Targeted extraction** using CSS or XPath selectors, plus selectors to strip ads, sidebars, and cookie banners.
 - **Custom schema extraction** via a JSON selector map (e.g. product title, price, images) saved with every page.
 - **Polite crawling**: per-domain pacing and `robots.txt` enforcement.
+- **Media Extractor & Downloader**: Discovers and catalogs all images, PDFs, docs, presentations, and videos into `media_manifest.json` and `media_manifest.csv`, with optional local asset downloading.
 - **JavaScript rendering** via a lazily loaded, reusable local Playwright browser (optional).
 - **Live progress** in the web UI over Server-Sent Events (SSE).
 
@@ -102,6 +103,15 @@ python main.py --url https://shop.example.com/product --format json \
 python main.py --url https://docs.example.com --format csv --output-dir ./dataset
 python main.py --url https://docs.example.com --format sqlite --output-dir ./dataset
 
+# Extract all media links (images, PDFs, docs, PPTs, videos) into JSON and CSV manifests
+python main.py --url https://example.com --depth 2 --extract-media
+
+# Media-only crawl: only discover and catalog media assets (skips saving page text/md files)
+python main.py --url https://example.com --depth 2 --media-only
+
+# Extract and download binary media files locally to output/media/<category>/
+python main.py --url https://example.com --extract-media --download-media --media-types "pdf,video,image"
+
 # JSONL with overlapping chunks for a vector database
 python main.py --url https://docs.example.com --format jsonl --chunk-size 4000 --chunk-overlap 400
 
@@ -145,6 +155,11 @@ python main.py
 | `--stdout` | Print extracted content to stdout (pipe-friendly) | `False` |
 | `--json` | Print the structured JSON document to stdout | `False` |
 | `--render-js` | Force Playwright rendering for every page | `False` |
+| `--extract-media` | Discover media links into `media_manifest.json` and `media_manifest.csv` | `False` |
+| `--media-mode` | Media output mode: `both` (scraped pages + media) or `media-only` | `both` |
+| `--media-only` | Shortcut for `--extract-media --media-mode media-only` | `False` |
+| `--download-media` | Download discovered media files locally to `<output-dir>/media/<category>/` | `False` |
+| `--media-types` | Comma-separated media categories: `image`, `pdf`, `doc`, `ppt`, `video` | All |
 | `--dry-run` | List target URLs without downloading page bodies | `False` |
 | `--webhook` | POST a crawl summary to this URL when the job finishes | None |
 | `--config` | Load defaults from `.scraperrc` / `scraper.json` | None |

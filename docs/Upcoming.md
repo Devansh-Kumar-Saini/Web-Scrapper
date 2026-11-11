@@ -137,9 +137,11 @@ This future plan focuses strictly on **core web scraping excellence, browser aut
   - Detect and parse complex HTML `<table>` elements into structured JSON, CSV, or Excel (`.xlsx`) datasets.
   - Handles nested headers (`colspan`, `rowspan`) and malformed tables cleanly.
 
-- [ ] **Media & Asset Downloader**
-  - Batch download images, linked PDFs, audio files, and documents encountered during a crawl.
-  - Configurable filters: file extensions (`.pdf`, `.xlsx`, `.zip`), minimum/maximum file sizes, and organized subfolder paths.
+- [x] **Media Extractor & Asset Downloader**
+  - Extract and catalog all media links (Images, PDFs, Docs, PPTs, Videos) into `media_manifest.json` and `media_manifest.csv` with source page URL, media type, and media URL.
+  - Configurable modes: combine with standard web scraping or run in media-only mode (skips regular page text/markdown files).
+  - Optional local downloading of binary media assets organized by category in `<output>/media/<category>/`.
+  - Full CLI (`--extract-media`, `--media-mode`, `--media-only`, `--download-media`, `--media-types`), REST API, and Web UI integration.
 
 - [ ] **Data Validation & Schema Assertions**
   - Validate extracted schema fields against JSON Schema or validation rules (e.g., regex patterns, required fields, numeric ranges).
