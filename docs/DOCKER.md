@@ -257,6 +257,10 @@ container. With GHCR, pushing a new Git tag does this automatically.
 
 ## 5. Troubleshooting
 
+**`0.0.0.0 refused to connect` or `ERR_CONNECTION_REFUSED` in browser**:
+- **Do not open `0.0.0.0:5000`**: Open **`http://localhost:5000`** or **`http://127.0.0.1:5000`**. Gunicorn logs `Listening at: http://0.0.0.0:5000` because it binds to all internal network interfaces, but modern browsers (Chrome 128+, Safari, Edge) block `0.0.0.0` as an IP destination for security.
+- **Port mapping**: Ensure you started the container with `-p 5000:5000` or used `docker compose up`. If `-p 5000:5000` is omitted, the port is only listening inside the container and cannot be reached from your machine.
+
 **`Cannot connect to the Docker daemon`** — Docker Desktop is not running. Open it
 and wait for the engine to start.
 

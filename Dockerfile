@@ -48,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)" || exit 1
 
 # One worker + threads keeps the in-memory job state and SSE streams consistent.
-CMD ["sh", "-c", "gunicorn Backend.app:app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 300"]
+CMD ["sh", "-c", "printf '\\n=======================================================\\n  Website Scraper Container Ready\\n  --> Open in browser: http://localhost:%s (or http://127.0.0.1:%s)\\n  (!) Do NOT open 0.0.0.0 in browser (blocked by macOS & Chrome)\\n  (!) Ensure port is published: docker run -p %s:%s or docker compose up\\n=======================================================\\n\\n' \"${PORT}\" \"${PORT}\" \"${PORT}\" \"${PORT}\" && exec gunicorn Backend.app:app --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 300"]

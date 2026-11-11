@@ -1,11 +1,14 @@
-name: Publish Docker image
+name: CI/CD Pipeline
 
-# Builds a multi-architecture image (Intel/AMD + Apple Silicon/ARM) and pushes
-# it to the GitHub Container Registry (GHCR) for free.
+# Runs automated local tests & Docker tests on all PRs and pushes.
+# If and only if both pass, it builds multi-arch images (AMD64 + ARM64)
+# and publishes them to GitHub Container Registry (GHCR).
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +16,114 @@ permissions:
   packages: write
 
 jobs:
+  test-local:
+    name: Test Local (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit & integration test suite
+        run: python -m unittest discover tests
+
+      - name: Smoke test CLI
+        run: |
+          python main.py --help
+          python main.py --url https://example.com --dry-run
+
+      - name: Test Local Web Server Startup & Health
+        run: |
+          python main.py --ui --port 5000 &
+          SERVER_PID=$!
+          # Poll health endpoint until healthy
+          HEALTHY=0
+          for i in $(seq 1 15); do
+            if curl -s http://127.0.0.1:5000/api/health | grep -q '"status":"ok"'; then
+              echo "Local server is healthy!"
+              HEALTHY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$HEALTHY" -ne 1 ]; then
+            echo "Local server failed to respond within 15 seconds"
+            kill -9 $SERVER_PID || true
+            exit 1
+          fi
+          curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
+          kill -9 $SERVER_PID || true
+
+  test-docker:
+    name: Test Docker Build & Container Health
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build Docker Image
+        run: docker build -t website-scraper:test .
+
+      - name: Test CLI inside container
+        run: |
+          docker run --rm website-scraper:test python main.py --help
+          docker run --rm website-scraper:test python main.py --url https://example.com --dry-run
+
+      - name: Start Container with Port Mapping
+        run: |
+          docker run -d --name test-scraper -p 5000:5000 -e PORT=5000 website-scraper:test
+
+      - name: Verify Container Health & UI Endpoints
+        run: |
+          HEALTHY=0
+          for i in $(seq 1 30); do
+            HEALTH=$(curl -s http://127.0.0.1:5000/api/health || true)
+            if echo "$HEALTH" | grep -q '"status":"ok"'; then
+              echo "Container HTTP endpoint is healthy: $HEALTH"
+              HEALTHY=1
+              break
+            fi
+            echo "Waiting for container to start (attempt $i)..."
+            sleep 1
+          done
+          if [ "$HEALTHY" -ne 1 ]; then
+            echo "Container logs:"
+            docker logs test-scraper
+            exit 1
+          fi
+          # Test both localhost and 127.0.0.1
+          curl -fsSL http://localhost:5000/api/health | grep -q '"status":"ok"'
+          curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
+
+      - name: Clean up test container
+        if: always()
+        run: docker rm -f test-scraper || true
+
+      - name: Test Docker Compose
+        run: |
+          docker compose up -d
+          sleep 4
+          curl -fsSL http://localhost:5000/api/health | grep -q '"status":"ok"'
+          docker compose down
+
   build-and-push:
+    name: Build & Publish Multi-Arch Image
+    needs: [test-local, test-docker]
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository

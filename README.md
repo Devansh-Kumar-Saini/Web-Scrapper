@@ -50,7 +50,7 @@ docker run -d --name website-scraper \
   website-scraper
 ```
 
-Open **`http://localhost:5000`**. Scraped files appear in `./output` on your machine.
+Open **`http://localhost:5000`** *(use `localhost` or `127.0.0.1`, not `0.0.0.0`, as modern browsers block 0.0.0.0)*. Scraped files appear in `./output` on your machine.
 
 Prebuilt images are also published for Intel/AMD and Apple Silicon:
 
