@@ -30,6 +30,8 @@
     sessionAvgRate: 0,
     peakRate: 0,
     catalogRenderLimit: 100,
+    isContainer: false,
+    defaultOutputDir: "./output",
   };
 
   // --- DOM Element References ---
@@ -80,6 +82,7 @@
   const proxyInput = document.getElementById("proxyInput");
   const webhookUrlInput = document.getElementById("webhookUrlInput");
   const outputDirInput = document.getElementById("outputDirInput");
+  const outputDirHint = document.getElementById("outputDirHint");
   const browseDirBtn = document.getElementById("browseDirBtn");
   const submitCrawlBtn = document.getElementById("submitCrawlBtn");
   const resetFormBtn = document.getElementById("resetFormBtn");
@@ -505,9 +508,11 @@
       }
 
       if (data.is_cloud) {
-        showToast(data.message, "warn", 4500);
-        if (outputDirInput) outputDirInput.value = "";
-        if (sidebarOutputLabel) sidebarOutputLabel.textContent = "No folder selected";
+        // Docker/cloud: the output folder is controlled by the mounted volume.
+        const containerPath = data.path || state.defaultOutputDir || "./output";
+        setSelectedOutputDir(containerPath, "Docker volume");
+        showToast(data.message, "info", 6500);
+        fetchOutputDirectory();
         return;
       }
 
@@ -621,8 +626,12 @@
     if (sitemapUrlInput) sitemapUrlInput.value = "";
     if (renderJsInput) renderJsInput.checked = false;
     if (dryRunInput) dryRunInput.checked = false;
-    if (outputDirInput) outputDirInput.value = "";
-    if (sidebarOutputLabel) sidebarOutputLabel.textContent = "No folder selected";
+    if (state.isContainer) {
+      setSelectedOutputDir(state.defaultOutputDir, "Docker volume");
+    } else {
+      if (outputDirInput) outputDirInput.value = "";
+      if (sidebarOutputLabel) sidebarOutputLabel.textContent = "No folder selected";
+    }
     if (webhookUrlInput) webhookUrlInput.value = "";
     selectorInput.value = "";
     excludeSelectorInput.value = "";
@@ -663,7 +672,7 @@
     const maxPages = parseInt(maxPagesInput.value, 10);
     const sameDomain = sameDomainInput.checked;
     const respectRobots = respectRobotsInput.checked;
-    const outputDir = getSelectedOutputDir();
+    const outputDir = getSelectedOutputDir() || (state.isContainer ? state.defaultOutputDir : "");
     if (!outputDir) {
       showToast("Choose a folder with Browse before starting the crawl.", "warn");
       switchView("viewCrawlSetup");
@@ -1435,6 +1444,19 @@
     return activeResultsPromise;
   }
 
+  function setSelectedOutputDir(path, sidebarText) {
+    if (outputDirInput) outputDirInput.value = path || "";
+    if (sidebarOutputLabel) {
+      if (sidebarText) {
+        sidebarOutputLabel.textContent = sidebarText;
+      } else {
+        sidebarOutputLabel.textContent = path
+          ? (path.length > 18 ? "..." + path.slice(-16) : path)
+          : "No folder selected";
+      }
+    }
+  }
+
   function getSelectedOutputDir() {
     return outputDirInput ? outputDirInput.value.trim() : "";
   }
@@ -2090,12 +2112,38 @@
   // =========================================================================
   // App Bootstrapping
   // =========================================================================
+  async function initEnvironment() {
+    try {
+      const resp = await fetch("/api/system/info");
+      if (!resp.ok) return;
+      const info = await resp.json();
+      if (!info.container) return;
+
+      state.isContainer = true;
+      state.defaultOutputDir = info.default_output_dir || "./output";
+      setSelectedOutputDir(state.defaultOutputDir, "Docker volume");
+
+      if (browseDirBtn) {
+        browseDirBtn.title = "Docker controls this folder through a mounted volume";
+        const label = browseDirBtn.querySelector("span");
+        if (label) label.textContent = "Docker volume";
+      }
+      if (outputDirHint) {
+        outputDirHint.textContent = info.output_dir_note || "Saved to the mounted output volume";
+      }
+    } catch (err) {
+      console.warn("Failed to load environment info:", err);
+    }
+  }
+
   initTheme();
   initSidebarState();
   updateSetupSummary();
-  fetchSavedPages();
-  fetchOutputDirectory();
-  initSSE();
+  initEnvironment().finally(() => {
+    fetchSavedPages();
+    fetchOutputDirectory();
+    initSSE();
+  });
 
   // Load view from hash if present
   const initialHash = window.location.hash.replace("#", "");

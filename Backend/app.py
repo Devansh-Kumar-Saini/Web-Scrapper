@@ -86,6 +86,15 @@ def _resolve_output_dir(raw: str) -> Path:
     return path.resolve()
 
 
+def _is_container() -> bool:
+    """True when the server runs in Docker or on a hosted platform."""
+    return bool(
+        os.environ.get("SCRAPER_CONTAINER")
+        or os.environ.get("RENDER")
+        or os.environ.get("DYNO")
+    )
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -758,10 +767,32 @@ def api_health() -> Any:
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/system/info")
+def api_system_info() -> Any:
+    """Runtime environment details the UI needs to adapt its storage controls."""
+    container = _is_container()
+    return jsonify({
+        "container": container,
+        "default_output_dir": "./output",
+        "output_dir_note": (
+            "Saved to the Docker volume mounted at ./output"
+            if container else ""
+        ),
+    })
+
+
 @app.route("/api/system/pick-folder", methods=["POST"])
 def api_pick_folder() -> Any:
     """Open the host machine's native folder picker and return the chosen path."""
-    if os.environ.get("RENDER") or os.environ.get("DYNO") or os.environ.get("SCRAPER_CONTAINER"):
+    if os.environ.get("SCRAPER_CONTAINER"):
+        return jsonify({
+            "is_cloud": True,
+            "container": True,
+            "path": "./output",
+            "message": "Running in Docker: files are saved to './output', which is mounted to the 'output' folder on your computer. Use Download ZIP to export them."
+        }), 200
+
+    if os.environ.get("RENDER") or os.environ.get("DYNO"):
         return jsonify({
             "is_cloud": True,
             "path": "./output",
