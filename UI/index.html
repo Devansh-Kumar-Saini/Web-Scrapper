@@ -622,32 +622,59 @@
                         </div>
                         <p class="format-desc">One record per line. Best for batch pipelines, Elasticsearch, and BigQuery data loaders.</p>
                       </label>
+
+                      <!-- Format 5: CSV -->
+                      <label class="format-card" data-format="csv">
+                        <input type="radio" name="formatOption" value="csv" />
+                        <div class="format-head">
+                          <span class="format-name">CSV (.csv)</span>
+                          <span class="format-badge">Spreadsheet</span>
+                        </div>
+                        <p class="format-desc">One row per page in <code>pages.csv</code>. Opens in Excel, Sheets, pandas, and BI tools.</p>
+                      </label>
+
+                      <!-- Format 6: SQLite -->
+                      <label class="format-card" data-format="sqlite">
+                        <input type="radio" name="formatOption" value="sqlite" />
+                        <div class="format-head">
+                          <span class="format-name">SQLite (.db)</span>
+                          <span class="format-badge">Database</span>
+                        </div>
+                        <p class="format-desc">A single <code>pages.db</code> with a <code>pages</code> table. Query full-text, metadata, and custom fields with SQL.</p>
+                      </label>
                     </div></fieldset>
                     <input type="hidden" id="formatInput" value="md" />
                   </div>
                 </div>
 
-                <!-- CSS Selectors Card -->
+                <!-- CSS / XPath Selectors Card -->
                 <div class="card">
                   <div class="card-header">
                     <div class="card-title-group">
-                      <h2 class="card-title">CSS Target Selectors</h2>
+                      <h2 class="card-title">CSS / XPath Selectors</h2>
                     </div>
                   </div>
                   <div class="card-body form-stack">
                     <div class="input-block">
                       <label for="selectorInput" class="input-label">Content Selector (Optional)</label>
-                      <input type="text" id="selectorInput" class="custom-input" placeholder="article, main, .post-content, #content" />
-                      <p class="input-desc">Extracts only the element matching this selector. Leave empty to process full page body.</p>
+                      <input type="text" id="selectorInput" class="custom-input" placeholder="article, main, .post-content, //main, xpath://article" />
+                      <p class="input-desc">Extracts only the element matching this CSS or XPath selector. Prefix XPath with <code>xpath:</code> or start with <code>//</code>. Leave empty to process the full page body.</p>
                     </div>
 
                     <div class="input-block">
                       <label for="excludeSelectorInput" class="input-label">Exclude Selectors</label>
-                      <input type="text" id="excludeSelectorInput" class="custom-input" placeholder="nav, footer, .ad, aside, .cookie-banner" />
-                      <p class="input-desc">Comma-separated selectors stripped before extraction.</p>
+                      <input type="text" id="excludeSelectorInput" class="custom-input" placeholder="nav, footer, .ad, //aside, xpath://div[@class='cookie']" />
+                      <p class="input-desc">Comma-separated CSS or XPath selectors stripped before extraction.</p>
+                    </div>
+
+                    <div class="input-block">
+                      <label for="schemaInput" class="input-label">Schema Fields (Optional JSON)</label>
+                      <textarea id="schemaInput" class="custom-input" rows="5" spellcheck="false" placeholder='{"title": "h1", "price": {"selector": ".price", "attr": "content"}, "images": {"selector": ".gallery img", "attr": "src", "all": true}}'></textarea>
+                      <p class="input-desc">Map custom field names to CSS or XPath selectors. Use <code>attr</code> to read an attribute and <code>all: true</code> to collect every match. Extracted values are saved in the <code>schema</code> field.</p>
                     </div>
                   </div>
                 </div>
+
 
                 <!-- RAG Chunking Options -->
                 <div class="card">
@@ -805,14 +832,20 @@
 
                   <div class="inspector-selector-row">
                     <div class="input-block">
-                      <label for="inspectorSelectorInput" class="input-label">Target CSS Selector</label>
-                      <input type="text" id="inspectorSelectorInput" class="custom-input" placeholder="article, main, .markdown-body, #content" spellcheck="false" />
+                      <label for="inspectorSelectorInput" class="input-label">Target CSS / XPath Selector</label>
+                      <input type="text" id="inspectorSelectorInput" class="custom-input" placeholder="article, main, //main, xpath://article" spellcheck="false" />
                     </div>
                     <div class="input-block">
                       <label for="inspectorExcludeSelectorInput" class="input-label">Exclude Selectors</label>
-                      <input type="text" id="inspectorExcludeSelectorInput" class="custom-input" placeholder="nav, footer, .advertisement, .cookie-banner" spellcheck="false" />
+                      <input type="text" id="inspectorExcludeSelectorInput" class="custom-input" placeholder="nav, footer, .advertisement, //aside" spellcheck="false" />
                     </div>
                     <button type="button" id="inspectorUseSetupBtn" class="btn btn-secondary btn-sm inspector-use-setup">Use setup selectors</button>
+                  </div>
+                  <div class="inspector-selector-row inspector-schema-row">
+                    <div class="input-block" style="flex:1;">
+                      <label for="inspectorSchemaInput" class="input-label">Schema Fields (Optional JSON)</label>
+                      <textarea id="inspectorSchemaInput" class="custom-input" rows="2" spellcheck="false" placeholder='{"title": "h1", "price": {"selector": ".price", "attr": "content"}}'></textarea>
+                    </div>
                   </div>
                   <p class="input-desc">Tweak a selector and the preview refreshes automatically once a page has been inspected. Output tabs above render Markdown, text, JSON, and HTML from a single request.</p>
                 </div>
@@ -971,6 +1004,8 @@
                     <option value="txt">Plain Text (.txt)</option>
                     <option value="jsonl">JSON Lines (.jsonl)</option>
                     <option value="json">JSON (.json)</option>
+                    <option value="csv">CSV (.csv)</option>
+                    <option value="sqlite">SQLite (.db)</option>
                   </select>
                   <button type="button" id="downloadZipCatalogBtn" class="btn btn-primary btn-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1069,6 +1104,8 @@
                     <option value="txt">Plain Text (.txt)</option>
                     <option value="jsonl">JSON Lines (.jsonl)</option>
                     <option value="json">JSON (.json)</option>
+                    <option value="csv">CSV (.csv)</option>
+                    <option value="sqlite">SQLite (.db)</option>
                   </select>
                   <button type="button" id="downloadZipBtn" class="btn btn-primary btn-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

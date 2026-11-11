@@ -8,14 +8,17 @@ into :class:`PageContent` objects and re-serialized through ``OutputWriter``.
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import re
+import sqlite3
 import zipfile
 from dataclasses import fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterable
+from urllib.parse import quote
 
 try:  # package imports
     from .extractor import PageContent
@@ -24,8 +27,20 @@ except ImportError:  # pragma: no cover - direct script execution
     from extractor import PageContent
     from writer import OUTPUT_FORMATS, OutputWriter
 
-_FORMAT_ALIASES = {"markdown": "md", "text": "txt", "md": "md", "txt": "txt", "json": "json", "jsonl": "jsonl"}
+_FORMAT_ALIASES = {
+    "markdown": "md",
+    "text": "txt",
+    "md": "md",
+    "txt": "txt",
+    "json": "json",
+    "jsonl": "jsonl",
+    "csv": "csv",
+    "sqlite": "sqlite",
+    "db": "sqlite",
+}
 _SKIP_FILES = {"index.json", "scrape_log.txt"}
+_JSON_FIELDS = ("links", "images", "headings", "chunks", "schema")
+_INT_FIELDS = ("depth", "status_code", "word_count")
 _FRONT_MATTER_RE = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
 _PAGE_FIELDS = {item.name for item in fields(PageContent)}
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\([^)]*\)")
@@ -101,6 +116,29 @@ def _parse_text_file(content: str) -> tuple[dict[str, Any], str]:
     return meta, "\n".join(lines[index:]).strip()
 
 
+def _coerce_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Restore typed values from flat CSV/SQLite storage."""
+    coerced: dict[str, Any] = dict(record)
+    for field_name in _JSON_FIELDS:
+        value = coerced.get(field_name)
+        if isinstance(value, str):
+            try:
+                coerced[field_name] = json.loads(value) if value.strip() else ({} if field_name == "schema" else [])
+            except ValueError:
+                coerced[field_name] = {} if field_name == "schema" else []
+    for field_name in _INT_FIELDS:
+        value = coerced.get(field_name)
+        if isinstance(value, str):
+            try:
+                coerced[field_name] = int(float(value))
+            except ValueError:
+                coerced.pop(field_name, None)
+    matched = coerced.get("selector_matched")
+    if isinstance(matched, str):
+        coerced["selector_matched"] = matched.strip().lower() not in {"", "0", "false", "no"}
+    return {key: value for key, value in coerced.items() if value is not None}
+
+
 def _record_from_mapping(data: dict[str, Any], *, fallback_title: str = "") -> dict[str, Any]:
     record = {key: value for key, value in data.items() if key in _PAGE_FIELDS and value is not None}
     record.setdefault("title", fallback_title or "Untitled page")
@@ -166,6 +204,34 @@ def _records_from_file(path: Path) -> list[dict[str, Any]]:
         record.setdefault("markdown", body)
         return [record]
 
+    if suffix == ".csv":
+        try:
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+        except OSError:
+            return []
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            filtered = {key: value for key, value in row.items() if key in _PAGE_FIELDS}
+            records.append(_record_from_mapping(_coerce_record(filtered), fallback_title=fallback_title))
+        return records
+
+    if suffix == ".db":
+        try:
+            connection = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            try:
+                rows = connection.execute("SELECT * FROM pages").fetchall()
+            finally:
+                connection.close()
+        except sqlite3.Error:
+            return []
+        records = []
+        for row in rows:
+            filtered = {key: row[key] for key in row.keys() if key in _PAGE_FIELDS}
+            records.append(_record_from_mapping(_coerce_record(filtered), fallback_title=fallback_title))
+        return records
+
     return []
 
 
@@ -202,7 +268,7 @@ def parse_saved_pages(output_dir: Path) -> list[dict[str, Any]]:
                         record.setdefault("title", entry["title"])
                 records.extend(file_records)
 
-    patterns = ("*.md", "*.txt", "*.json", "*.jsonl")
+    patterns = ("*.md", "*.txt", "*.json", "*.jsonl", "*.csv", "*.db")
     for pattern in patterns:
         for file_path in sorted(output_dir.glob(pattern)):
             if not file_path.is_file() or file_path.name in seen_files or file_path.name in _SKIP_FILES:

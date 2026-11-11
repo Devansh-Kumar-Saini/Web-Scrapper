@@ -337,8 +337,10 @@ class TestExportConversion(unittest.TestCase):
         self.assertEqual(normalize_format("markdown"), "md")
         self.assertEqual(normalize_format("text"), "txt")
         self.assertEqual(normalize_format("jsonl"), "jsonl")
+        self.assertEqual(normalize_format("csv"), "csv")
+        self.assertEqual(normalize_format("db"), "sqlite")
         with self.assertRaises(ValueError):
-            normalize_format("csv")
+            normalize_format("xml")
 
     def test_parse_json_pages(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -350,6 +352,22 @@ class TestExportConversion(unittest.TestCase):
         self.assertEqual(records[0]["url"], "https://example.com/docs")
         self.assertIn("# Docs", records[0]["markdown"])
         self.assertEqual(records[0]["depth"], 1)
+
+    def test_parse_csv_and_sqlite_pages(self):
+        for output_format, filename in (("csv", "pages.csv"), ("sqlite", "pages.db")):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                writer = OutputWriter(temp_dir, output_format)
+                writer.save_document(_document(), 1)
+                writer.finalize()
+                records = parse_saved_pages(Path(temp_dir))
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["url"], "https://example.com/docs")
+                self.assertEqual(records[0]["depth"], 1)
+                self.assertIn("# Docs", records[0]["markdown"])
+                payload = build_results_zip(Path(temp_dir), "md")
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    self.assertTrue(any(name.endswith(".md") for name in archive.namelist()))
+                self.assertTrue((Path(temp_dir) / filename).exists())
 
     def test_convert_json_to_markdown_zip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -419,7 +437,7 @@ class TestDownloadAPI(unittest.TestCase):
     def test_download_rejects_unknown_format(self):
         response = self.client.get(
             "/api/results/download",
-            query_string={"output_dir": self.temp_dir.name, "format": "csv"},
+            query_string={"output_dir": self.temp_dir.name, "format": "xml"},
         )
         self.assertEqual(response.status_code, 400)
 

@@ -94,6 +94,7 @@
   const formatInput = document.getElementById("formatInput");
   const selectorInput = document.getElementById("selectorInput");
   const excludeSelectorInput = document.getElementById("excludeSelectorInput");
+  const schemaInput = document.getElementById("schemaInput");
   const chunkSizeInput = document.getElementById("chunkSizeInput");
   const chunkOverlapInput = document.getElementById("chunkOverlapInput");
 
@@ -117,6 +118,7 @@
   const inspectFormatBtns = document.querySelectorAll("[data-inspect-format]");
   const inspectorSelectorInput = document.getElementById("inspectorSelectorInput");
   const inspectorExcludeSelectorInput = document.getElementById("inspectorExcludeSelectorInput");
+  const inspectorSchemaInput = document.getElementById("inspectorSchemaInput");
   const inspectorLiveToggle = document.getElementById("inspectorLiveToggle");
   const inspectorSelectorStatus = document.getElementById("inspectorSelectorStatus");
   const inspectorWordCount = document.getElementById("inspectorWordCount");
@@ -451,7 +453,15 @@
     if (renderJsInput && renderJsInput.checked) flags.push("JS render");
     if (dryRunInput && dryRunInput.checked) flags.push("Dry run");
     const flagText = flags.length ? ` · ${flags.join(" · ")}` : "";
-    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers · ${delay}s delay${flagText} · ${domainMsg} · ${format}`;
+    const schemaField = parseSchemaField(schemaInput);
+    let schemaText = "";
+    if (schemaField.error) {
+      schemaText = " · invalid schema JSON";
+    } else if (schemaField.value) {
+      const schemaCount = Object.keys(schemaField.value).length;
+      if (schemaCount) schemaText = ` · ${schemaCount} schema field(s)`;
+    }
+    setupSummary.textContent = `${count} seed(s) · Depth ${depth} · Max ${maxPages} pages · ${concurrency} workers · ${delay}s delay${flagText} · ${domainMsg} · ${format}${schemaText}`;
   }
 
   urlInput.addEventListener("input", updateSetupSummary);
@@ -460,6 +470,7 @@
   if (sitemapUrlInput) sitemapUrlInput.addEventListener("input", updateSetupSummary);
   if (renderJsInput) renderJsInput.addEventListener("change", updateSetupSummary);
   if (dryRunInput) dryRunInput.addEventListener("change", updateSetupSummary);
+  if (schemaInput) schemaInput.addEventListener("input", updateSetupSummary);
 
   // Format Selection Cards
   formatCards.forEach((card) => {
@@ -521,6 +532,8 @@
         if (sidebarOutputLabel) {
           sidebarOutputLabel.textContent = data.path.length > 18 ? "..." + data.path.slice(-16) : data.path;
         }
+        fetchSavedPages();
+        fetchOutputDirectory();
         showToast(`Output location selected: ${data.path}`, "success");
       } else if (data.error) {
         showToast(data.error, "error");
@@ -635,6 +648,7 @@
     if (webhookUrlInput) webhookUrlInput.value = "";
     selectorInput.value = "";
     excludeSelectorInput.value = "";
+    if (schemaInput) schemaInput.value = "";
     chunkSizeInput.value = 0;
     chunkOverlapInput.value = 400;
     includePatternInput.value = "";
@@ -654,6 +668,22 @@
   globalStartBtn.addEventListener("click", () => {
     startCrawlJob();
   });
+
+  function parseSchemaField(input) {
+    if (!input) return { value: undefined };
+    const raw = input.value.trim();
+    if (!raw) return { value: undefined };
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      return { error: "Schema must be valid JSON." };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "Schema must be a JSON object mapping field names to selectors." };
+    }
+    return { value: parsed };
+  }
 
   async function startCrawlJob() {
     if (state.isRunning) return;
@@ -693,6 +723,14 @@
     const impersonate = impersonateInput ? impersonateInput.value : "chrome";
     const proxy = proxyInput ? proxyInput.value.trim() : "";
     const webhookUrl = webhookUrlInput ? webhookUrlInput.value.trim() : "";
+    const schemaField = parseSchemaField(schemaInput);
+    if (schemaField.error) {
+      showToast(`Invalid schema: ${schemaField.error}`, "warn");
+      switchView("viewCrawlSetup");
+      if (schemaInput) schemaInput.focus();
+      return;
+    }
+    const schema = schemaField.value;
 
     // Disable start buttons, show loading state
     setLaunchState(true);
@@ -711,6 +749,7 @@
           output_format: format,
           target_selector: targetSelector,
           exclude_selectors: excludeSelectors,
+          schema,
           chunk_size: chunkSize,
           chunk_overlap: chunkOverlap,
           include_patterns: includePatterns,
@@ -1266,6 +1305,11 @@
       if (!live) showToast("Please enter a URL to inspect", "warn");
       return;
     }
+    const schemaField = parseSchemaField(inspectorSchemaInput);
+    if (schemaField.error) {
+      if (!live) showToast(`Invalid schema: ${schemaField.error}`, "warn");
+      return;
+    }
 
     if (state.inspectTimer) {
       clearTimeout(state.inspectTimer);
@@ -1300,6 +1344,7 @@
           render_js: inspectorJsToggle.checked,
           target_selector: inspectorSelectorInput.value.trim() || undefined,
           exclude_selectors: inspectorExcludeSelectorInput.value.trim() || undefined,
+          schema: schemaField.value,
           respect_robots: respectRobotsInput ? respectRobotsInput.checked : true,
           chunk_size: Number.isFinite(inspectorChunkSize) ? inspectorChunkSize : 0,
           chunk_overlap: Number.isFinite(inspectorChunkOverlap) ? inspectorChunkOverlap : 400,
@@ -1391,6 +1436,7 @@
     inspectorUseSetupBtn.addEventListener("click", () => {
       if (inspectorSelectorInput) inspectorSelectorInput.value = selectorInput.value.trim();
       if (inspectorExcludeSelectorInput) inspectorExcludeSelectorInput.value = excludeSelectorInput.value.trim();
+      if (inspectorSchemaInput && schemaInput) inspectorSchemaInput.value = schemaInput.value.trim();
       showToast("Copied selectors from Crawl Setup", "info", 1600);
       if (state.inspectHasRun) {
         runInspectorScrape({ live: true });
@@ -1406,6 +1452,9 @@
   }
   if (inspectorExcludeSelectorInput && !inspectorExcludeSelectorInput.value) {
     inspectorExcludeSelectorInput.value = excludeSelectorInput.value.trim();
+  }
+  if (inspectorSchemaInput && !inspectorSchemaInput.value && schemaInput) {
+    inspectorSchemaInput.value = schemaInput.value.trim();
   }
 
   inspectorCopyBtn.addEventListener("click", async () => {
@@ -1754,11 +1803,24 @@
     }
   }
 
+  if (downloadFormatCatalog && downloadFormatOutput) {
+    downloadFormatCatalog.addEventListener("change", () => {
+      downloadFormatOutput.value = downloadFormatCatalog.value;
+    });
+    downloadFormatOutput.addEventListener("change", () => {
+      downloadFormatCatalog.value = downloadFormatOutput.value;
+    });
+  }
+
   function getDownloadFormat() {
-    const selects = [downloadFormatCatalog, downloadFormatOutput].filter(Boolean);
-    const visible = selects.find((select) => select.offsetParent !== null);
-    const active = visible || selects[0];
-    return active ? active.value || "" : "";
+    if (downloadFormatCatalog && downloadFormatCatalog.offsetParent !== null) {
+      return downloadFormatCatalog.value || "";
+    }
+    if (downloadFormatOutput && downloadFormatOutput.offsetParent !== null) {
+      return downloadFormatOutput.value || "";
+    }
+    return (downloadFormatCatalog && downloadFormatCatalog.value) ||
+           (downloadFormatOutput && downloadFormatOutput.value) || "";
   }
 
   async function downloadResultsZip() {
@@ -1770,11 +1832,6 @@
     const outDir = getSelectedOutputDir();
     if (!outDir) {
       showToast("Choose a folder with Browse before downloading files.", "warn");
-      return;
-    }
-    const totalFiles = parseInt(outputTotalFilesVal ? outputTotalFilesVal.textContent : "0", 10) || 0;
-    if (state.savedPages.length === 0 && totalFiles === 0) {
-      showToast("No files found in output directory to download.", "warn");
       return;
     }
 
@@ -1797,48 +1854,30 @@
     try {
       let downloadUrl = `/api/results/download?output_dir=${encodeURIComponent(outDir)}`;
       if (downloadFormat) downloadUrl += `&format=${encodeURIComponent(downloadFormat)}`;
-      const resp = await fetch(downloadUrl);
-      if (!resp.ok) {
-        let errorMsg = `HTTP ${resp.status}`;
+
+      // Verify server is ready to build and serve the archive
+      const checkResp = await fetch(downloadUrl, { method: "HEAD" });
+      if (!checkResp.ok) {
+        const errResp = await fetch(downloadUrl);
+        let errorMsg = `HTTP ${errResp.status}`;
         try {
-          const errData = await resp.json();
+          const errData = await errResp.json();
           if (errData.error) errorMsg = errData.error;
         } catch (_) {}
         throw new Error(errorMsg);
       }
 
-      let filename = `scraped_pages_${Date.now()}.zip`;
-      const disposition = resp.headers.get("content-disposition") || resp.headers.get("Content-Disposition");
-      if (disposition && disposition.includes("filename=")) {
-        const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-        if (match && match[1]) {
-          filename = match[1].replace(/['"]/g, "").trim();
-        }
-      }
-
-      const blob = await resp.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      // Stream download directly through the browser's native download manager.
+      // This avoids memory bloat and prevents .crdownload truncation/failure caused by revoked blob URLs.
       const downloadLink = document.createElement("a");
-      downloadLink.href = blobUrl;
-      downloadLink.download = filename;
+      downloadLink.style.display = "none";
+      downloadLink.href = downloadUrl;
+      downloadLink.setAttribute("download", "");
       document.body.appendChild(downloadLink);
       downloadLink.click();
-      downloadLink.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      setTimeout(() => downloadLink.remove(), 1000);
 
-      // Once the user downloads the zip file, clear all the Live Monitor and Saved Pages, etc
-      try {
-        await fetch("/api/results/clear", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ output_dir: outDir }),
-        });
-      } catch (clearErr) {
-        console.warn("Failed to clear server results:", clearErr);
-      }
-
-      clearAllClientData();
-      showToast("ZIP downloaded. Live Monitor, Saved Pages, and storage have been cleared.", "success");
+      showToast("ZIP download started successfully!", "success");
     } catch (err) {
       showToast(`Download failed: ${err.message}`, "error");
     } finally {
@@ -2040,6 +2079,7 @@
       sameDomainInput.checked = recipe.sameDomain;
       selectorInput.value = recipe.selector;
       excludeSelectorInput.value = recipe.excludeSelector;
+      if (schemaInput) schemaInput.value = recipe.schema || "";
       chunkSizeInput.value = recipe.chunkSize;
       chunkOverlapInput.value = recipe.chunkOverlap;
       includePatternInput.value = recipe.includePattern;

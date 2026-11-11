@@ -15,19 +15,19 @@ from urllib.parse import urlparse
 try:
     from .config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from .crawler import Crawler
-    from .extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
+    from .extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, parse_schema, validate_selectors
     from .filters import parse_patterns, parse_selectors
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from .webhook import notify, validate_webhook_url
-    from .writer import OUTPUT_FORMATS, OutputWriter
+    from .writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
 except ImportError:  # pragma: no cover - direct script execution
     from config import DEFAULT_MAX_PAGES, MAX_DEPTH, REQUEST_DELAY_SECONDS
     from crawler import Crawler
-    from extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, validate_selectors
+    from extractor import _DEFAULT_CHUNK_OVERLAP, extract_structured, parse_schema, validate_selectors
     from filters import parse_patterns, parse_selectors
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
     from webhook import notify, validate_webhook_url
-    from writer import OUTPUT_FORMATS, OutputWriter
+    from writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
 
 
 def _load_config_file(explicit_path: str | None = None) -> dict[str, Any]:
@@ -50,6 +50,20 @@ def _load_config_file(explicit_path: str | None = None) -> dict[str, Any]:
             except Exception as exc:
                 sys.stderr.write(f"Warning: Failed to parse config file {candidate}: {exc}\n")
     return {}
+
+
+def _load_schema(raw: str | None, path: str | None) -> dict[str, Any]:
+    """Load a schema selector map from inline JSON or a JSON file."""
+    if path:
+        try:
+            content = Path(path).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"could not read schema file: {exc}") from exc
+        try:
+            return parse_schema(json.loads(content))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid schema file: {exc}") from exc
+    return parse_schema(raw)
 
 
 def _valid_url(value: str) -> str | None:
@@ -89,7 +103,7 @@ def _interactive(args: argparse.Namespace) -> argparse.Namespace:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Crawl websites and save clean text, Markdown, JSON, or JSONL locally."
+        description="Crawl websites and save clean text, Markdown, JSON, JSONL, CSV, or SQLite locally."
     )
     parser.add_argument("--url", action="append", help="URL, repeat the flag or separate URLs with commas")
     parser.add_argument("--depth", type=int, choices=range(MAX_DEPTH + 1), default=1)
@@ -100,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         choices=OUTPUT_FORMATS,
         default="txt",
-        help="Output format: txt (default), md, json, or jsonl",
+        help="Output format: txt (default), md, json, jsonl, csv, or sqlite",
     )
     parser.add_argument(
         "--include-pattern",
@@ -114,13 +128,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATTERN",
         help="Skip URLs matching this glob (or 're:' regex). Repeatable.",
     )
-    parser.add_argument("--selector", dest="target_selector", help="Extract only within this CSS selector")
+    parser.add_argument(
+        "--selector",
+        dest="target_selector",
+        help="Extract only within this CSS or XPath selector (prefix XPath with 'xpath:' or start with '//')",
+    )
     parser.add_argument(
         "--exclude-selector",
         dest="exclude_selectors",
         action="append",
         metavar="SELECTOR",
-        help="Strip elements matching this CSS selector before extraction. Repeatable.",
+        help="Strip elements matching this CSS or XPath selector before extraction. Repeatable.",
+    )
+    parser.add_argument(
+        "--schema",
+        metavar="JSON",
+        default=None,
+        help=(
+            "JSON map of custom fields to selectors, e.g. "
+            '\'{"title": "h1", "price": {"selector": ".price", "attr": "content"}, '
+            '"images": {"selector": ".gallery img", "attr": "src", "all": true}}\''
+        ),
+    )
+    parser.add_argument(
+        "--schema-file",
+        metavar="PATH",
+        default=None,
+        help="Path to a JSON file containing a schema selector map",
     )
     parser.add_argument(
         "--chunk-size",
@@ -297,6 +331,14 @@ def run(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 2
 
+    try:
+        schema_spec = _load_schema(getattr(args, "schema", None), getattr(args, "schema_file", None))
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    if schema_spec:
+        logger.info("Schema fields: %s", ", ".join(schema_spec))
+
     impersonate_val = args.impersonate
     if impersonate_val == "none":
         impersonate_val = None
@@ -379,6 +421,7 @@ def run(args: argparse.Namespace) -> int:
     )
     crawled = saved = failed = 0
     collected_documents = []
+    collected_depths: list[int] = []
     saved_pages_meta: list[dict[str, Any]] = []
     try:
         for page in crawler.crawl(urls):
@@ -389,6 +432,7 @@ def run(args: argparse.Namespace) -> int:
                     url=page.url,
                     target_selector=args.target_selector,
                     exclude_selectors=exclude_selectors,
+                    schema=schema_spec,
                     chunk_size=args.chunk_size,
                     chunk_overlap=args.chunk_overlap,
                 )
@@ -399,9 +443,13 @@ def run(args: argparse.Namespace) -> int:
 
             if is_piped:
                 collected_documents.append(document)
+                collected_depths.append(page.depth)
                 if getattr(args, "stdout", False) and args.format == "jsonl":
                     print(json.dumps(document.to_dict()))
-                elif not getattr(args, "json", False) and not (getattr(args, "stdout", False) and args.format in {"json", "jsonl"}):
+                elif not getattr(args, "json", False) and not (
+                    getattr(args, "stdout", False)
+                    and args.format in {"json", "jsonl", "csv", "sqlite"}
+                ):
                     content = document.markdown if args.format == "md" else document.text
                     if saved > 0:
                         print("\n---\n")
@@ -433,6 +481,16 @@ def run(args: argparse.Namespace) -> int:
             print(json.dumps(collected_documents[0].to_dict(), indent=2))
         else:
             print(json.dumps([d.to_dict() for d in collected_documents], indent=2))
+
+    if getattr(args, "stdout", False) and args.format == "csv":
+        import csv as _csv
+
+        stdout_writer = _csv.DictWriter(sys.stdout, fieldnames=_ROW_FIELDS)
+        stdout_writer.writeheader()
+        for document, page_depth in zip(collected_documents, collected_depths):
+            stdout_writer.writerow(_document_row(document, page_depth, datetime.now(timezone.utc).isoformat()))
+    elif getattr(args, "stdout", False) and args.format == "sqlite":
+        sys.stderr.write("Note: sqlite output is saved in the output directory; nothing is printed to stdout.\n")
 
     elapsed = time.monotonic() - started
     skipped = len(crawler.skipped_reasons) + len(invalid)

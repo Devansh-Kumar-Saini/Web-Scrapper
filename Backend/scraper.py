@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 try:
     from .extractor import _DEFAULT_CHUNK_OVERLAP, PageContent, extract_structured, validate_selectors
@@ -20,6 +21,7 @@ def scrape_url(
     render_js: bool = False,
     target_selector: str | None = None,
     exclude_selectors: list[str] | None = None,
+    schema: dict[str, Any] | str | None = None,
     respect_robots: bool = True,
     chunk_size: int = 0,
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
@@ -63,6 +65,7 @@ def scrape_url(
             url=final_url,
             target_selector=target_selector,
             exclude_selectors=exclude_selectors,
+            schema=schema,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )

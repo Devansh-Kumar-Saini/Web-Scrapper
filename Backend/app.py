@@ -25,7 +25,7 @@ try:
     from .crawler import Crawler
     from .exporter import build_results_zip
     from .exporter import normalize_format as normalize_download_format
-    from .extractor import extract_structured, validate_selectors
+    from .extractor import extract_structured, parse_schema, validate_selectors
     from .fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from .filters import parse_patterns, parse_selectors
     from .scraper import scrape_url
@@ -37,7 +37,7 @@ except ImportError:
     from crawler import Crawler
     from exporter import build_results_zip
     from exporter import normalize_format as normalize_download_format
-    from extractor import extract_structured, validate_selectors
+    from extractor import extract_structured, parse_schema, validate_selectors
     from fetcher import FetchError, NonHtmlContent, RobotsDisallowed
     from filters import parse_patterns, parse_selectors
     from scraper import scrape_url
@@ -115,7 +115,17 @@ def _as_int(value: Any, default: int) -> int:
 def _normalize_output_format(value: Any) -> str | None:
     """Accept both CLI (txt/md) and API-friendly (text/markdown) format names."""
     fmt = str(value or "txt").strip().lower()
-    aliases = {"text": "txt", "markdown": "md", "jsonl": "jsonl", "json": "json", "md": "md", "txt": "txt"}
+    aliases = {
+        "text": "txt",
+        "markdown": "md",
+        "jsonl": "jsonl",
+        "json": "json",
+        "md": "md",
+        "txt": "txt",
+        "csv": "csv",
+        "sqlite": "sqlite",
+        "db": "sqlite",
+    }
     fmt = aliases.get(fmt, fmt)
     return fmt if fmt in OUTPUT_FORMATS else None
 
@@ -194,6 +204,7 @@ class JobState:
     exclude_patterns: list[str] = field(default_factory=list)
     target_selector: str = ""
     exclude_selectors: list[str] = field(default_factory=list)
+    schema: dict[str, Any] = field(default_factory=dict)
     chunk_size: int = 0
     chunk_overlap: int = 400
     respect_robots: bool = True
@@ -420,6 +431,7 @@ class JobManager:
         render_js: bool = False,
         dry_run: bool = False,
         webhook_url: str = "",
+        schema: dict[str, Any] | None = None,
     ) -> tuple[bool, str]:
         with self.lock:
             if self.state.status in {"running", "stopping"}:
@@ -438,6 +450,7 @@ class JobManager:
                 exclude_patterns=parse_patterns(exclude_patterns),
                 target_selector=target_selector,
                 exclude_selectors=parse_selectors(exclude_selectors),
+                schema=dict(schema or {}),
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 respect_robots=respect_robots,
@@ -479,6 +492,7 @@ class JobManager:
                 render_js,
                 dry_run,
                 webhook_url or "",
+                dict(schema or {}),
             ),
             daemon=True,
         )
@@ -521,6 +535,7 @@ class JobManager:
         render_js: bool = False,
         dry_run: bool = False,
         webhook_url: str = "",
+        schema: dict[str, Any] | None = None,
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -554,6 +569,8 @@ class JobManager:
             self.log("INFO", f"Target selector: {target_selector}")
         if exclude_selectors:
             self.log("INFO", f"Excluding selectors: {', '.join(exclude_selectors)}")
+        if schema:
+            self.log("INFO", f"Schema fields: {', '.join(schema)}")
         if webhook_url:
             self.log("INFO", f"Webhook callback configured: {webhook_url}")
 
@@ -563,6 +580,7 @@ class JobManager:
                 url=page_url,
                 target_selector=target_selector or None,
                 exclude_selectors=exclude_selectors,
+                schema=schema,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
@@ -844,6 +862,10 @@ def api_scrape() -> Any:
 
     target_selector = str(data.get("selector") or data.get("target_selector") or "").strip() or None
     exclude_selectors = parse_selectors(data.get("exclude_selectors", data.get("exclude_selector")))
+    try:
+        schema_spec = parse_schema(data.get("schema"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     chunk_size = _as_int(data.get("chunk_size", 0), 0)
     chunk_overlap = _as_int(data.get("chunk_overlap", 400), 400)
     if chunk_size < 0 or chunk_overlap < 0:
@@ -866,6 +888,7 @@ def api_scrape() -> Any:
             render_js=_as_bool(data.get("render_js"), False),
             target_selector=target_selector,
             exclude_selectors=exclude_selectors,
+            schema=schema_spec,
             respect_robots=_as_bool(data.get("respect_robots"), True),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -945,6 +968,10 @@ def api_scrape_start() -> Any:
         validate_selectors(target_selector or None, exclude_selectors)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    try:
+        schema_spec = parse_schema(data.get("schema"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     output_format = _normalize_output_format(data.get("format", data.get("output_format", "txt")))
     if output_format is None:
@@ -1003,6 +1030,7 @@ def api_scrape_start() -> Any:
         render_js=render_js,
         dry_run=dry_run,
         webhook_url=webhook_url,
+        schema=schema_spec,
     )
 
     if not started:
@@ -1023,6 +1051,7 @@ def api_scrape_start() -> Any:
             "exclude_patterns": exclude_patterns,
             "target_selector": target_selector,
             "exclude_selectors": exclude_selectors,
+            "schema": schema_spec,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "respect_robots": respect_robots,
@@ -1109,7 +1138,7 @@ def api_results() -> Any:
     # If manifest is empty or missing, scan for saved page files.
     if not pages:
         seen_names: set[str] = set()
-        for pattern in ("*.txt", "*.md", "*.json", "*.jsonl"):
+        for pattern in ("*.txt", "*.md", "*.json", "*.jsonl", "*.csv", "*.db"):
             for f in sorted(out_path.glob(pattern)):
                 if f.name in {"scrape_log.txt", "index.json"} or f.name in seen_names:
                     continue
@@ -1149,8 +1178,21 @@ def api_results_file() -> Any:
         return jsonify({"error": "File not found."}), 404
 
     try:
-        content = target_file.read_text(encoding="utf-8", errors="replace")
         stat = target_file.stat()
+        if target_file.suffix.lower() in {".db", ".sqlite"}:
+            return jsonify({
+                "file": target_file.name,
+                "bytes": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "content": (
+                    "[SQLite database preview unavailable]\n\n"
+                    "Download the ZIP or open pages.db with any SQLite client "
+                    "and run: SELECT * FROM pages;"
+                ),
+                "lines": 0,
+                "binary": True,
+            })
+        content = target_file.read_text(encoding="utf-8", errors="replace")
         return jsonify({
             "file": target_file.name,
             "bytes": stat.st_size,
@@ -1185,12 +1227,14 @@ def api_results_download() -> Any:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = f"_{target_format}" if target_format else ""
-    return send_file(
+    response = send_file(
         io.BytesIO(zip_bytes),
         mimetype="application/zip",
         as_attachment=True,
         download_name=f"scraped_pages_{timestamp}{suffix}.zip",
     )
+    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+    return response
 
 
 @app.route("/api/results/clear", methods=["POST"])

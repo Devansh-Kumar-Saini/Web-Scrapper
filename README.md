@@ -11,9 +11,11 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 
 - **RAG-ready Markdown** with headings, lists, links, tables, images, and code blocks preserved.
 - **Structured JSON / JSONL** with title, description, author, publish date, canonical URL, links, images, headings, and optional chunks.
+- **CSV and SQLite output** (`pages.csv`, `pages.db`) for spreadsheets, pandas, and SQL analysis.
 - **Instant single-page scrape API** (`POST /api/scrape`) for `curl` and application code.
 - **URL filtering** with shell globs or regular expressions (`include` / `exclude`).
-- **Targeted extraction** using CSS selectors, plus selectors to strip ads, sidebars, and cookie banners.
+- **Targeted extraction** using CSS or XPath selectors, plus selectors to strip ads, sidebars, and cookie banners.
+- **Custom schema extraction** via a JSON selector map (e.g. product title, price, images) saved with every page.
 - **Polite crawling**: per-domain pacing and `robots.txt` enforcement.
 - **JavaScript rendering** via a lazily loaded, reusable local Playwright browser (optional).
 - **Live progress** in the web UI over Server-Sent Events (SSE).
@@ -88,6 +90,18 @@ python main.py --url https://example.com --depth 3 \
 python main.py --url https://blog.example.com/post --format md \
   --selector "article" --exclude-selector "aside, .advertisement, .cookie-banner"
 
+# XPath selectors (prefix with xpath: or start with //)
+python main.py --url https://example.com --format md \
+  --selector "xpath://main" --exclude-selector "//nav"
+
+# Structured schema extraction into a custom set of fields
+python main.py --url https://shop.example.com/product --format json \
+  --schema '{"title": "h1", "price": {"selector": ".price", "attr": "content"}, "images": {"selector": ".gallery img", "attr": "src", "all": true}}'
+
+# CSV or SQLite output
+python main.py --url https://docs.example.com --format csv --output-dir ./dataset
+python main.py --url https://docs.example.com --format sqlite --output-dir ./dataset
+
 # JSONL with overlapping chunks for a vector database
 python main.py --url https://docs.example.com --format jsonl --chunk-size 4000 --chunk-overlap 400
 
@@ -112,11 +126,13 @@ python main.py
 | `--depth` | Traversal depth limit (0 to 5) | `1` |
 | `--max-pages` | Maximum pages to fetch | `100` |
 | `--same-domain` / `--no-same-domain` | Restrict crawling to seed domain(s) | `True` |
-| `--format` | Output format: `txt`, `md`, `json`, `jsonl` | `txt` |
+| `--format` | Output format: `txt`, `md`, `json`, `jsonl`, `csv`, `sqlite` | `txt` |
 | `--include-pattern` | Only follow URLs matching a glob or `re:` regex; repeatable | None |
 | `--exclude-pattern` | Skip URLs matching a glob or `re:` regex; repeatable | None |
-| `--selector` | Extract only within the first matching CSS selector | Whole page |
-| `--exclude-selector` | Strip matching elements before extraction; repeatable | None |
+| `--selector` | Extract only within the first matching CSS or XPath selector | Whole page |
+| `--exclude-selector` | Strip matching CSS or XPath elements before extraction; repeatable | None |
+| `--schema` | JSON map of custom fields to selectors | None |
+| `--schema-file` | Path to a JSON file containing a schema selector map | None |
 | `--chunk-size` | Emit chunks of this many characters; `0` disables | `0` |
 | `--chunk-overlap` | Overlap between chunks in characters | `400` |
 | `--respect-robots` / `--no-respect-robots` | Enforce `robots.txt` | `True` |
@@ -173,8 +189,9 @@ Request parameters:
 | `url` | Page to scrape (required) | — |
 | `format` | `markdown`, `text`, `json`, `html` | `markdown` |
 | `render_js` | Render with local Playwright Chromium | `false` |
-| `selector` / `target_selector` | Extract only inside this CSS selector | Whole page |
-| `exclude_selectors` | String or list of selectors to strip | None |
+| `selector` / `target_selector` | Extract only inside this CSS or XPath selector | Whole page |
+| `exclude_selectors` | String or list of CSS/XPath selectors to strip | None |
+| `schema` | Object or JSON string mapping custom fields to selectors | None |
 | `chunk_size` / `chunk_overlap` | Include overlapping chunks in JSON output | `0` / `400` |
 | `respect_robots` | Enforce `robots.txt` | `true` |
 
@@ -192,10 +209,10 @@ The existing job API is unchanged:
 | `/api/scrape/events` | GET | SSE progress/log stream |
 | `/api/results` | GET | List saved pages from `index.json` |
 | `/api/results/file` | GET | Preview one saved file |
-| `/api/results/download` | GET | Download output directory as ZIP (`?format=md\|txt\|json\|jsonl` converts first) |
+| `/api/results/download` | GET | Download output directory as ZIP (`?format=md\|txt\|json\|jsonl\|csv\|sqlite` converts first) |
 | `/api/results/clear` | POST | Delete files in the output directory |
 
-`POST /api/scrape/start` also accepts `format`, `include_patterns`, `exclude_patterns`, `target_selector`, `exclude_selectors`, `chunk_size`, `chunk_overlap`, `concurrency`, `delay`, `sitemap`, `proxy`, and `webhook_url`. A configured webhook receives `crawl.completed`, `crawl.stopped`, or `crawl.failed` with page stats and saved file metadata.
+`POST /api/scrape/start` also accepts `format`, `include_patterns`, `exclude_patterns`, `target_selector`, `exclude_selectors`, `schema`, `chunk_size`, `chunk_overlap`, `concurrency`, `delay`, `sitemap`, `proxy`, and `webhook_url`. A configured webhook receives `crawl.completed`, `crawl.stopped`, or `crawl.failed` with page stats and saved file metadata.
 
 ## Python Library
 
@@ -209,8 +226,14 @@ document = scrape_url(
     "https://docs.example.com/api",
     target_selector="article",
     exclude_selectors=[".advertisement"],
+    schema={
+        "title": "h1",
+        "price": {"selector": ".price", "attr": "content"},
+        "images": {"selector": ".gallery img", "attr": "src", "all": True},
+    },
 )
 print(document.markdown)
+print(document.schema)
 print(document.to_dict())
 
 # Multi-page crawl
@@ -230,11 +253,11 @@ Open **`http://127.0.0.1:5000`**.
 UI features:
 
 - Seed URLs, depth slider, page cap, and same-domain toggle.
-- **Advanced extraction** panel for output format, target selector, excluded selectors, and include/exclude URL patterns.
-- **Single URL Inspector** with live selector preview: tweak target/exclude CSS selectors and the Markdown, text, JSON, and HTML tabs refresh automatically.
+- **Advanced extraction** panel for output format, content/exclude selectors (CSS or XPath), schema fields, and include/exclude URL patterns.
+- **Single URL Inspector** with live selector preview: tweak target/exclude CSS or XPath selectors and schema JSON, and the Markdown, text, JSON, and HTML tabs refresh automatically.
 - Live cached/saved/skipped counters and a streamed log console.
-- Click any saved page to preview its extracted content (works for TXT, Markdown, and JSON).
-- ZIP download in the original format or converted on demand to Markdown, plain text, JSON, or JSONL.
+- Click any saved page to preview its extracted content (works for TXT, Markdown, JSON, and CSV).
+- ZIP download in the original format or converted on demand to Markdown, plain text, JSON, JSONL, CSV, or SQLite.
 - Optional webhook callback that POSTs a crawl summary to your own backend on completion.
 - Native folder picker (macOS, Windows, Linux) when running locally.
 
@@ -257,6 +280,7 @@ Every page gets a structured record in memory with these fields:
   "images": [{"src": "https://docs.example.com/logo.png", "alt": "Logo"}],
   "headings": ["API Documentation", "Authentication"],
   "chunks": [],
+  "schema": {"title": "API Documentation", "price": null},
   "word_count": 412,
   "status_code": 200,
   "selector_matched": true
@@ -269,14 +293,33 @@ Every page gets a structured record in memory with these fields:
 | `md` | `<page>.md` with YAML front matter and GitHub-Flavored Markdown |
 | `json` | `<page>.json` with the full structured record |
 | `jsonl` | `pages.jsonl`, one JSON record per line |
+| `csv` | `pages.csv`, one row per page (lists and schema stored as JSON) |
+| `sqlite` | `pages.db` with a `pages` table (query with any SQLite client) |
 
 The output directory also contains `index.json` (manifest of saved pages) and `scrape_log.txt` (crawler events and skipped-resource reasons).
+
+### Schema extraction
+
+`--schema` (or `schema` in the API/library) maps custom field names to selectors:
+
+```json
+{
+  "title": "h1",
+  "price": {"selector": ".price", "attr": "content"},
+  "gallery": {"xpath": "//div[@class='gallery']//img", "attr": "src", "all": true}
+}
+```
+
+- A plain string is treated as a selector and returns the element text.
+- Objects accept `selector`, `css`, or `xpath`, plus optional `attr` (read an attribute and resolve `href`/`src` against the page URL) and `all` (return every match as a list).
+- XPath is used automatically when the selector starts with `xpath:`, `//`, `.//`, `(//`, `(.//`, or `./`.
+- Results are stored in the page's `schema` field and as a JSON column in CSV/SQLite output.
 
 ### Chunking
 
 `--chunk-size` is measured in characters, not tokens (a rough approximation is four characters per token). Chunks split on paragraph boundaries when possible and include `--chunk-overlap` characters of context from the previous chunk. A size of `4000` with an overlap of `400` is a practical starting point for RAG.
 
-The test suite covers the folder picker and output directory handling, plus Phase 1 features: Markdown/metadata extraction, selectors, URL filters, all output formats, robots.txt handling, and the single-page API.
+The test suite covers the folder picker and output directory handling plus phases 1–3: Markdown/metadata extraction, CSS and XPath selectors, schema extraction, URL filters, all output formats (including CSV/SQLite conversion), robots.txt handling, the single-page API, and webhooks.
 
 ## License
 

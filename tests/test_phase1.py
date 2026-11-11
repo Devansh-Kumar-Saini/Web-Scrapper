@@ -1,6 +1,8 @@
 """Tests for Phase 1: Markdown, single-page API, filters, selectors, and packaging."""
 
+import csv
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +70,43 @@ class TestExtraction(unittest.TestCase):
         self.assertNotIn("Buy something", document.markdown)
         self.assertNotIn("Footer boilerplate", document.markdown)
         self.assertIn("Welcome to the API", document.text)
+
+    def test_xpath_target_and_exclude_selectors(self):
+        document = extract_structured(
+            SAMPLE_HTML,
+            url="https://docs.example.com/api",
+            target_selector="//article",
+            exclude_selectors=["xpath://div[@class='advertisement']"],
+        )
+        self.assertTrue(document.selector_matched)
+        self.assertIn("Welcome to the API", document.text)
+        self.assertNotIn("Buy something", document.markdown)
+        self.assertNotIn("Footer boilerplate", document.markdown)
+
+    def test_schema_extraction_with_attributes_and_lists(self):
+        document = extract_structured(
+            SAMPLE_HTML,
+            url="https://docs.example.com/api",
+            schema={
+                "title": "h1",
+                "description": {"selector": "meta[name='description']", "attr": "content"},
+                "image_src": {"xpath": "//article//img", "attr": "src"},
+                "links": {"selector": "article a", "attr": "href", "all": True},
+            },
+        )
+        self.assertEqual(document.schema["title"], "API Documentation")
+        self.assertEqual(document.schema["description"], "Learn the API")
+        self.assertEqual(document.schema["image_src"], "https://docs.example.com/logo.png")
+        self.assertEqual(document.schema["links"], ["https://docs.example.com/auth"])
+        self.assertEqual(document.to_dict()["schema"]["title"], "API Documentation")
+
+    def test_schema_accepts_json_string_and_rejects_invalid(self):
+        document = extract_structured(SAMPLE_HTML, schema='{"heading": "h1"}')
+        self.assertEqual(document.schema, {"heading": "API Documentation"})
+        with self.assertRaises(ValueError):
+            extract_structured(SAMPLE_HTML, schema="not-json")
+        with self.assertRaises(ValueError):
+            extract_structured(SAMPLE_HTML, schema={"bad": {"attr": "href"}})
 
     def test_unmatched_selector_falls_back(self):
         document = extract_structured(SAMPLE_HTML, target_selector=".does-not-exist")
@@ -160,6 +199,37 @@ class TestWriterFormats(unittest.TestCase):
             self.assertEqual(len(lines), 2)
             self.assertEqual(json.loads(lines[1])["url"], "https://a.example/two")
 
+    def test_csv_output_appends_rows(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            writer = OutputWriter(tmp_dir, output_format="csv")
+            writer.save_document(extract_structured(SAMPLE_HTML, url="https://a.example/one"), 0)
+            writer.save_document(extract_structured(SAMPLE_HTML, url="https://a.example/two"), 1)
+            writer.finalize()
+
+            with (Path(tmp_dir) / "pages.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1]["url"], "https://a.example/two")
+            self.assertEqual(json.loads(rows[1]["images"])[0]["alt"], "Logo")
+            manifest = json.loads((Path(tmp_dir) / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest[1]["format"], "csv")
+
+    def test_sqlite_output_creates_pages_table(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            writer = OutputWriter(tmp_dir, output_format="sqlite")
+            writer.save_document(
+                extract_structured(SAMPLE_HTML, url="https://a.example/one", schema={"heading": "h1"}),
+                1,
+            )
+            writer.finalize()
+
+            connection = sqlite3.connect(Path(tmp_dir) / "pages.db")
+            try:
+                rows = connection.execute("SELECT url, depth, schema FROM pages").fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(rows, [("https://a.example/one", 1, '{"heading": "API Documentation"}')])
+
     def test_txt_output_remains_backward_compatible(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             writer = OutputWriter(tmp_dir)
@@ -230,6 +300,7 @@ class TestScrapeAPI(unittest.TestCase):
                     "render_js": True,
                     "selector": "article",
                     "exclude_selectors": [".advertisement"],
+                    "schema": {"heading": "h1"},
                     "chunk_size": 100,
                     "respect_robots": False,
                 },
@@ -242,6 +313,7 @@ class TestScrapeAPI(unittest.TestCase):
         self.assertTrue(kwargs["render_js"])
         self.assertEqual(kwargs["target_selector"], "article")
         self.assertEqual(kwargs["exclude_selectors"], [".advertisement"])
+        self.assertEqual(kwargs["schema"], {"heading": "h1"})
         self.assertEqual(kwargs["chunk_size"], 100)
         self.assertFalse(kwargs["respect_robots"])
 
@@ -302,6 +374,29 @@ class TestScrapeAPI(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mock_start.call_args.kwargs["output_format"], "jsonl")
+
+    def test_start_accepts_schema_and_new_formats(self):
+        for output_format in ("csv", "sqlite", "db"):
+            with patch("Backend.app.job_manager.start_crawl", return_value=(True, "ok")) as mock_start:
+                response = self.client.post(
+                    "/api/scrape/start",
+                    json={
+                        "urls": ["https://example.com"],
+                        "output_format": output_format,
+                        "schema": {"title": "h1", "price": {"selector": ".price", "attr": "content"}},
+                    },
+                )
+            self.assertEqual(response.status_code, 200)
+            expected = "sqlite" if output_format == "db" else output_format
+            self.assertEqual(mock_start.call_args.kwargs["output_format"], expected)
+            self.assertEqual(mock_start.call_args.kwargs["schema"]["title"], "h1")
+
+    def test_start_rejects_invalid_schema(self):
+        response = self.client.post(
+            "/api/scrape/start",
+            json={"urls": ["https://example.com"], "schema": "not-json"},
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

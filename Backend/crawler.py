@@ -9,10 +9,8 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
-
-from bs4 import BeautifulSoup
 
 try:
     from .config import REQUEST_DELAY_SECONDS, SKIPPED_EXTENSIONS

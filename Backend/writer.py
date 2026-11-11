@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 try:
@@ -13,9 +16,84 @@ try:
 except ImportError:  # pragma: no cover - direct script execution
     from extractor import PageContent
 
-OUTPUT_FORMATS = ("txt", "md", "json", "jsonl")
+OUTPUT_FORMATS = ("txt", "md", "json", "jsonl", "csv", "sqlite")
 _SUFFIXES = {"txt": ".txt", "md": ".md", "json": ".json", "jsonl": ".jsonl"}
 _JSONL_FILENAME = "pages.jsonl"
+_CSV_FILENAME = "pages.csv"
+_SQLITE_FILENAME = "pages.db"
+
+# Shared column order for CSV rows and the SQLite ``pages`` table.
+_ROW_FIELDS = (
+    "url",
+    "title",
+    "description",
+    "author",
+    "published_time",
+    "canonical_url",
+    "depth",
+    "scraped_at",
+    "status_code",
+    "word_count",
+    "selector_matched",
+    "text",
+    "markdown",
+    "html",
+    "links",
+    "images",
+    "headings",
+    "chunks",
+    "schema",
+)
+
+_SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT,
+    title TEXT,
+    description TEXT,
+    author TEXT,
+    published_time TEXT,
+    canonical_url TEXT,
+    depth INTEGER,
+    scraped_at TEXT,
+    status_code INTEGER,
+    word_count INTEGER,
+    selector_matched INTEGER,
+    text TEXT,
+    markdown TEXT,
+    html TEXT,
+    links TEXT,
+    images TEXT,
+    headings TEXT,
+    chunks TEXT,
+    schema TEXT
+)
+"""
+
+
+def _document_row(document: PageContent, depth: int, scraped_at: str) -> dict[str, Any]:
+    """Flatten a document into one CSV/SQLite row (lists stored as JSON)."""
+    return {
+        "url": document.url,
+        "title": document.title,
+        "description": document.description,
+        "author": document.author,
+        "published_time": document.published_time,
+        "canonical_url": document.canonical_url,
+        "depth": depth,
+        "scraped_at": scraped_at,
+        "status_code": document.status_code,
+        "word_count": document.word_count,
+        "selector_matched": int(bool(document.selector_matched)),
+        "text": document.text,
+        "markdown": document.markdown,
+        "html": document.html,
+        "links": json.dumps(document.links, ensure_ascii=False),
+        "images": json.dumps(document.images, ensure_ascii=False),
+        "headings": json.dumps(document.headings, ensure_ascii=False),
+        "chunks": json.dumps(document.chunks, ensure_ascii=False),
+        "schema": json.dumps(document.schema, ensure_ascii=False),
+    }
 
 
 def _safe_stem(url: str) -> str:
@@ -43,6 +121,7 @@ class OutputWriter:
         self._used_names: set[str] = set()
         self.files_written = 0
         self.written_files: set[str] = set()
+        self._sqlite_connection: sqlite3.Connection | None = None
 
         manifest_file = self.output_dir / "index.json"
         if manifest_file.exists():
@@ -73,6 +152,43 @@ class OutputWriter:
         self.files_written += 1
         return path
 
+    def _save_csv(self, document: PageContent, depth: int, scraped_at: str) -> tuple[str, int]:
+        path = self.output_dir / _CSV_FILENAME
+        before = path.stat().st_size if path.exists() else 0
+        row = _document_row(document, depth, scraped_at)
+        with path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=_ROW_FIELDS)
+            if before == 0:
+                writer.writeheader()
+            writer.writerow(row)
+        self.files_written += 1
+        self.written_files.add(_CSV_FILENAME)
+        return _CSV_FILENAME, path.stat().st_size - before
+
+    def _get_sqlite(self) -> sqlite3.Connection:
+        if self._sqlite_connection is None:
+            connection = sqlite3.connect(self.output_dir / _SQLITE_FILENAME)
+            connection.execute(_SQLITE_SCHEMA)
+            connection.commit()
+            self._sqlite_connection = connection
+        return self._sqlite_connection
+
+    def _save_sqlite(self, document: PageContent, depth: int, scraped_at: str) -> tuple[str, int]:
+        path = self.output_dir / _SQLITE_FILENAME
+        before = path.stat().st_size if path.exists() else 0
+        row = _document_row(document, depth, scraped_at)
+        connection = self._get_sqlite()
+        columns = ", ".join(_ROW_FIELDS)
+        placeholders = ", ".join("?" for _ in _ROW_FIELDS)
+        connection.execute(
+            f"INSERT INTO pages ({columns}) VALUES ({placeholders})",
+            [row[field] for field in _ROW_FIELDS],
+        )
+        connection.commit()
+        self.files_written += 1
+        self.written_files.add(_SQLITE_FILENAME)
+        return _SQLITE_FILENAME, path.stat().st_size - before
+
     def save_document(self, document: PageContent, depth: int) -> str:
         """Persist a structured page in the configured output format."""
         scraped_at = datetime.now(timezone.utc).isoformat()
@@ -85,7 +201,11 @@ class OutputWriter:
             entry["format"] = self.output_format
         byte_count = 0
 
-        if self.output_format == "jsonl":
+        if self.output_format == "csv":
+            filename, byte_count = self._save_csv(document, depth, scraped_at)
+        elif self.output_format == "sqlite":
+            filename, byte_count = self._save_sqlite(document, depth, scraped_at)
+        elif self.output_format == "jsonl":
             filename = _JSONL_FILENAME
             record = document.to_dict()
             record.update({"depth": depth, "scraped_at": scraped_at})
@@ -147,6 +267,12 @@ class OutputWriter:
         return self.save_document(PageContent(url=url, title=title, text=text), depth)
 
     def finalize(self) -> None:
+        if self._sqlite_connection is not None:
+            try:
+                self._sqlite_connection.commit()
+                self._sqlite_connection.close()
+            finally:
+                self._sqlite_connection = None
         (self.output_dir / "index.json").write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
         self.files_written += 1
         self.written_files.add("index.json")

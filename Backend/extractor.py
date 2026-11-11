@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Comment, Tag
+from lxml import etree
 
 try:
     from markdownify import markdownify as _markdownify
@@ -44,6 +47,7 @@ class PageContent:
     images: list[dict[str, str]] = field(default_factory=list)
     headings: list[str] = field(default_factory=list)
     chunks: list[str] = field(default_factory=list)
+    schema: dict[str, Any] = field(default_factory=dict)
     word_count: int = 0
     status_code: int = 0
     selector_matched: bool = True
@@ -63,6 +67,7 @@ class PageContent:
             "images": self.images,
             "headings": self.headings,
             "chunks": self.chunks,
+            "schema": self.schema,
             "word_count": self.word_count,
             "status_code": self.status_code,
             "selector_matched": self.selector_matched,
@@ -80,6 +85,178 @@ def _text_score(element: Tag) -> int:
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+_XPATH_PREFIX = "xpath:"
+
+
+def _is_xpath(selector: str) -> bool:
+    """Return True for explicit ``xpath:`` selectors and common XPath syntax."""
+    value = (selector or "").strip()
+    if value.lower().startswith(_XPATH_PREFIX):
+        return True
+    return value.startswith(("//", ".//", "(//", "(.//", "./"))
+
+
+def _xpath_expression(selector: str) -> str:
+    value = (selector or "").strip()
+    if value.lower().startswith(_XPATH_PREFIX):
+        return value[len(_XPATH_PREFIX):].strip()
+    return value
+
+
+def _xpath_elements(html: str, selector: str) -> list[etree._Element]:
+    try:
+        tree = etree.HTML(html)
+    except (etree.ParserError, ValueError) as exc:
+        raise ValueError(f"invalid document for XPath selector '{selector}'") from exc
+    if tree is None:
+        return []
+    try:
+        nodes = tree.xpath(_xpath_expression(selector))
+    except etree.XPathError as exc:
+        raise ValueError(f"invalid XPath selector '{selector}'") from exc
+    return [node for node in nodes if isinstance(node, etree._Element)]
+
+
+def _xpath_root(html: str, selector: str) -> Tag | None:
+    elements = _xpath_elements(html, selector)
+    if not elements:
+        return None
+    serialized = etree.tostring(elements[0], encoding="unicode", method="html")
+    fragment = BeautifulSoup(serialized, "lxml")
+    container = fragment.body or fragment
+    first = container.find() if isinstance(container, Tag) else None
+    return first or (container if isinstance(container, Tag) else None)
+
+
+def _remove_xpath_matches(soup: BeautifulSoup, selector: str) -> BeautifulSoup:
+    """Remove elements matching an XPath expression and return a fresh soup."""
+    try:
+        tree = etree.HTML(str(soup))
+    except (etree.ParserError, ValueError):
+        return soup
+    if tree is None:
+        return soup
+    try:
+        nodes = tree.xpath(_xpath_expression(selector))
+    except etree.XPathError as exc:
+        raise ValueError(f"invalid XPath selector '{selector}'") from exc
+
+    removed = False
+    for node in nodes:
+        if not isinstance(node, etree._Element):
+            continue
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
+            removed = True
+    if not removed:
+        return soup
+    return BeautifulSoup(etree.tostring(tree, encoding="unicode", method="html"), "lxml")
+
+
+def _element_string(node: Any, attribute: str | None, base_url: str) -> str | None:
+    if attribute:
+        value = node.get(attribute)
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            value = " ".join(str(item) for item in value)
+        text = str(value).strip()
+        if not text:
+            return None
+        if attribute.lower() in {"href", "src"} and base_url:
+            if not text.startswith(("data:", "mailto:", "tel:", "javascript:", "#")):
+                text = urljoin(base_url, text)
+        return _normalize(text) or None
+    if isinstance(node, Tag):
+        text = node.get_text(" ", strip=True)
+    else:
+        text = " ".join("".join(node.itertext()).split())
+    return _normalize(text) or None
+
+
+def _select_schema_nodes(soup: BeautifulSoup, selector: str) -> list[Any]:
+    if _is_xpath(selector):
+        return list(_xpath_elements(str(soup), selector))
+    try:
+        return list(soup.select(selector))
+    except Exception as exc:
+        raise ValueError(f"invalid CSS selector '{selector}'") from exc
+
+
+def _extract_schema(
+    soup: BeautifulSoup,
+    schema: dict[str, Any],
+    base_url: str,
+) -> dict[str, Any]:
+    """Extract custom fields from a selector map.
+
+    Each field accepts either a selector string (text content) or an object with
+    ``selector``/``css``/``xpath``, optional ``attr``, and optional ``all``.
+    """
+    result: dict[str, Any] = {}
+    for field_name, spec in schema.items():
+        selector: str | None = None
+        attribute: str | None = None
+        multiple = False
+
+        if isinstance(spec, str):
+            selector = spec
+        elif isinstance(spec, dict):
+            attribute = str(spec.get("attr") or spec.get("attribute") or "").strip() or None
+            multiple = bool(spec.get("all"))
+            if spec.get("xpath"):
+                selector = "xpath:" + str(spec["xpath"]).strip()
+            else:
+                selector = spec.get("selector") or spec.get("css")
+
+        selector = str(selector).strip() if selector else ""
+        if not selector:
+            result[field_name] = [] if multiple else None
+            continue
+
+        nodes = _select_schema_nodes(soup, selector)
+        values = [
+            value
+            for node in nodes
+            if (value := _element_string(node, attribute, base_url))
+        ]
+        result[field_name] = values if multiple else (values[0] if values else None)
+    return result
+
+
+def parse_schema(value: Any) -> dict[str, Any]:
+    """Normalize a schema spec supplied as a dict or a JSON object string."""
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        data = value
+    else:
+        try:
+            data = json.loads(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("schema must be a JSON object") from exc
+    if not isinstance(data, dict):
+        raise ValueError("schema must be a JSON object mapping field names to selectors")
+
+    normalized: dict[str, Any] = {}
+    for field_name, spec in data.items():
+        key = str(field_name).strip()
+        if not key:
+            raise ValueError("schema field names cannot be empty")
+        if isinstance(spec, str):
+            if not spec.strip():
+                raise ValueError(f"schema field '{key}' has an empty selector")
+            normalized[key] = spec.strip()
+        elif isinstance(spec, dict):
+            if not (spec.get("selector") or spec.get("css") or spec.get("xpath")):
+                raise ValueError(f"schema field '{key}' needs a 'selector', 'css', or 'xpath' key")
+            normalized[key] = spec
+        else:
+            raise ValueError(f"schema field '{key}' must be a selector string or an object")
+    return normalized
 
 
 def _element_text(element: Tag) -> str:
@@ -161,10 +338,13 @@ def _absolutize(root: Tag, base_url: str) -> None:
 
 def _find_root(soup: BeautifulSoup, target_selector: str | None) -> tuple[Tag, bool]:
     if target_selector:
-        try:
-            selected = soup.select_one(target_selector)
-        except Exception as exc:
-            raise ValueError(f"invalid target selector '{target_selector}'") from exc
+        if _is_xpath(target_selector):
+            selected = _xpath_root(str(soup), target_selector)
+        else:
+            try:
+                selected = soup.select_one(target_selector)
+            except Exception as exc:
+                raise ValueError(f"invalid target selector '{target_selector}'") from exc
         if selected is not None:
             return selected, True
 
@@ -293,10 +473,13 @@ def validate_selectors(
     target_selector: str | None = None,
     exclude_selectors: list[str] | None = None,
 ) -> None:
-    """Raise ValueError when any selector is not valid CSS."""
+    """Raise ValueError when any CSS or XPath selector is invalid."""
     soup = BeautifulSoup("<html><body></body></html>", "lxml")
     candidates = ([target_selector] if target_selector else []) + list(exclude_selectors or [])
     for selector in candidates:
+        if _is_xpath(selector):
+            _xpath_elements("<html><body></body></html>", selector)
+            continue
         try:
             soup.select(selector)
         except Exception as exc:
@@ -368,13 +551,16 @@ def extract_structured(
     exclude_selectors: list[str] | None = None,
     chunk_size: int = 0,
     chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
+    schema: dict[str, Any] | str | None = None,
 ) -> PageContent:
     """Extract text, Markdown, metadata, links, images, and headings.
 
-    ``target_selector`` limits extraction to the first matching CSS selector.
-    ``exclude_selectors`` strips matching elements (ads, cookie banners, sidebars)
-    before extraction. ``chunk_size`` > 0 also produces overlapping ``chunks``.
+    ``target_selector`` limits extraction to the first matching CSS or XPath
+    selector. ``exclude_selectors`` strips matching elements (ads, cookie
+    banners, sidebars) before extraction. ``chunk_size`` > 0 also produces
+    overlapping ``chunks``. ``schema`` maps custom field names to selectors.
     """
+    schema_spec = parse_schema(schema)
     soup = BeautifulSoup(html, "lxml")
     metadata = _document_metadata(soup)
     if metadata["canonical_url"] and url:
@@ -382,6 +568,9 @@ def extract_structured(
     _remove_noise(soup, aggressive=not target_selector)
 
     for selector in exclude_selectors or []:
+        if _is_xpath(selector):
+            soup = _remove_xpath_matches(soup, selector)
+            continue
         try:
             matches = soup.select(selector)
         except Exception as exc:
@@ -389,6 +578,7 @@ def extract_structured(
         for node in matches:
             node.decompose()
 
+    schema_values = _extract_schema(soup, schema_spec, url) if schema_spec else {}
     root, selector_matched = _find_root(soup, target_selector)
     _absolutize(root, url)
     links, images = _collect_links_and_images(root, url)
@@ -417,6 +607,7 @@ def extract_structured(
         images=images,
         headings=headings,
         chunks=chunks,
+        schema=schema_values,
         word_count=len(text.split()),
         selector_matched=selector_matched,
     )
