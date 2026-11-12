@@ -742,6 +742,7 @@ class Crawler:
             yield from self._crawl_persistent_concurrent(seed_domains)
         else:
             yield from self._crawl_persistent_sequential(seed_domains)
+        self.flush_saved_files()
         stopped = bool(self.stop_event and self.stop_event.is_set())
         store.update_job(job_id, status="stopped" if stopped else "completed", stats=self.stats)
 
@@ -751,7 +752,7 @@ class Crawler:
         if outcome["kind"] not in {"page", "unchanged"}:
             return
         parent_depth = int(outcome.get("depth", 0))
-        entries: list[tuple[str, int, str, str]] = []
+        entries: list[tuple[str, int, str, str, int]] = []
         for candidate in outcome.get("links", []):
             reason = self.url_filter.excluded_by(candidate)
             if reason:
@@ -759,11 +760,17 @@ class Crawler:
                     self.skipped_reasons.append(f"{reason}: {candidate}")
                 self.logger.info("Skipped %s (%s)", candidate, reason)
                 continue
+            cand_depth = parent_depth + 1
+            # Prioritize shallower hub/pagination pages so workers never starve waiting for links
+            prio = max(0, 50 - cand_depth * 5)
+            if re.search(r"(?:page[-_/]?\d+|p=\d+|index\.html?$|/category/)", candidate, re.IGNORECASE):
+                prio += 20
             entries.append((
                 candidate,
-                parent_depth + 1,
+                cand_depth,
                 _root_domain(candidate),
                 self._sitemap_lastmods.get(candidate, ""),
+                prio,
             ))
         if entries:
             self.store.enqueue_many(self.job_id, entries, max_total=self.max_pages)
@@ -919,12 +926,15 @@ class Crawler:
 
     def _crawl_persistent_concurrent(self, seed_domains: set[str]) -> Iterator[Page]:
         import concurrent.futures
+        import queue
 
         assert self.store is not None
         store = self.store
         job_id = self.job_id or ""
         state_lock = threading.Lock()
         active: dict[concurrent.futures.Future, dict[str, Any]] = {}
+        page_queue: queue.Queue[Page | None] = queue.Queue(maxsize=max(50, self.concurrency * 2))
+        scheduler_done = threading.Event()
 
         def worker_task(claimed: dict[str, Any]) -> dict[str, Any]:
             if self.stop_event and self.stop_event.is_set():
@@ -945,60 +955,82 @@ class Crawler:
             return len(claimed_list)
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency)
-        last_stats_flush = time.monotonic()
-        try:
-            schedule()
-            while True:
-                if self.stop_event and self.stop_event.is_set():
-                    self.logger.info("Crawl stopped by request.")
-                    break
 
+        def scheduler_loop() -> None:
+            last_stats_flush = time.monotonic()
+            try:
                 with state_lock:
-                    if not active:
-                        # No in-flight work: either delayed retries are waiting
-                        # or the queue is exhausted.
-                        if schedule() == 0:
-                            if not self._wait_for_retry(job_id):
-                                break
-                        continue
-                    current = list(active.keys())
-
-                done, _ = concurrent.futures.wait(
-                    current, timeout=0.05, return_when=concurrent.futures.FIRST_COMPLETED
-                )
-                pages_to_yield: list[Page] = []
-                with state_lock:
-                    for fut in done:
-                        claimed = active.pop(fut)
-                        try:
-                            outcome = fut.result()
-                        except Exception as exc:
-                            self.logger.warning("Worker task error: %s", exc)
-                            outcome = {
-                                "kind": "failed",
-                                "url": claimed["url"],
-                                "depth": claimed["depth"],
-                                "error_type": "unknown",
-                                "message": str(exc),
-                            }
-                        if outcome["kind"] == "stopped":
-                            continue
-                        self._persistent_enqueue(outcome, seed_domains)
-                        self._persistent_finish(outcome, claimed)
-                        page = outcome.get("page")
-                        if page is not None:
-                            pages_to_yield.append(page)
-                    now_mono = time.monotonic()
-                    if now_mono - last_stats_flush >= 1.0:
-                        store.update_job(job_id, stats=self.stats)
-                        last_stats_flush = now_mono
                     schedule()
+                while not (self.stop_event and self.stop_event.is_set()):
+                    with state_lock:
+                        if not active:
+                            # No in-flight work: either delayed retries are waiting
+                            # or the queue is exhausted.
+                            if schedule() == 0:
+                                if not self._wait_for_retry(job_id):
+                                    break
+                            continue
+                        current = list(active.keys())
 
-                for page in pages_to_yield:
-                    if self.on_page_crawled:
-                        self.on_page_crawled(page)
-                    yield page
+                    done, _ = concurrent.futures.wait(
+                        current, timeout=0.02, return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    with state_lock:
+                        for fut in done:
+                            claimed = active.pop(fut, None)
+                            if claimed is None:
+                                continue
+                            try:
+                                outcome = fut.result()
+                            except Exception as exc:
+                                self.logger.warning("Worker task error: %s", exc)
+                                outcome = {
+                                    "kind": "failed",
+                                    "url": claimed["url"],
+                                    "depth": claimed["depth"],
+                                    "error_type": "unknown",
+                                    "message": str(exc),
+                                }
+                            if outcome.get("kind") == "stopped":
+                                continue
+                            self._persistent_enqueue(outcome, seed_domains)
+                            self._persistent_finish(outcome, claimed)
+                            page = outcome.get("page")
+                            if page is not None:
+                                page_queue.put(page)
+
+                        now_mono = time.monotonic()
+                        if now_mono - last_stats_flush >= 1.0:
+                            store.update_job(job_id, stats=self.stats)
+                            last_stats_flush = now_mono
+                        schedule()
+            except Exception as exc:
+                self.logger.warning("Scheduler loop encountered error: %s", exc)
+            finally:
+                scheduler_done.set()
+                page_queue.put(None)
+
+        scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
+        scheduler_thread.start()
+
+        try:
+            while True:
+                try:
+                    page = page_queue.get(timeout=0.05)
+                except queue.Empty:
+                    if scheduler_done.is_set():
+                        break
+                    continue
+                if page is None:
+                    break
+                if self.on_page_crawled:
+                    self.on_page_crawled(page)
+                yield page
         finally:
+            if not scheduler_done.is_set():
+                if self.stop_event:
+                    self.stop_event.set()
+            scheduler_thread.join(timeout=2.0)
             with state_lock:
                 for fut in active:
                     fut.cancel()
@@ -1015,21 +1047,39 @@ class Crawler:
 
     # --- checkpoint helpers --------------------------------------------------
 
+    def flush_saved_files(self) -> None:
+        """Batch flush any pending (url, filename) checkpoint writes to SQLite."""
+        if not hasattr(self, "_pending_saved_files"):
+            return
+        with self._stats_lock:
+            to_flush = self._pending_saved_files[:]
+            self._pending_saved_files.clear()
+        if not to_flush:
+            return
+        if self.store is not None and self.job_id:
+            try:
+                self.store.set_file_many(self.job_id, to_flush)
+            except Exception as exc:
+                self.logger.debug("Could not batch record saved files: %s", exc)
+        if self.delta_cache is not None:
+            for url, filename in to_flush:
+                try:
+                    self.delta_cache.set_file(url, filename)
+                except Exception:
+                    pass
+
     def record_page_saved(self, page: Page, filename: str) -> None:
         """Attach the saved filename to the durable checkpoint and delta cache."""
         url = getattr(page, "url", "")
         if not url or not filename:
             return
-        if self.store is not None and self.job_id:
-            try:
-                self.store.set_file(self.job_id, url, filename)
-            except Exception as exc:  # pragma: no cover - best effort
-                self.logger.debug("Could not record saved file for %s: %s", url, exc)
-        if self.delta_cache is not None:
-            try:
-                self.delta_cache.set_file(url, filename)
-            except Exception as exc:  # pragma: no cover - best effort
-                self.logger.debug("Could not record delta file for %s: %s", url, exc)
+        if not hasattr(self, "_pending_saved_files"):
+            self._pending_saved_files: list[tuple[str, str]] = []
+        with self._stats_lock:
+            self._pending_saved_files.append((url, filename))
+            should_flush = len(self._pending_saved_files) >= 25
+        if should_flush:
+            self.flush_saved_files()
 
     def circuit_snapshot(self) -> dict[str, Any]:
         try:

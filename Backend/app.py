@@ -1014,6 +1014,7 @@ class JobManager:
                     media_collector.session = crawler.fetcher.session
 
                 last_qstats_update = time.monotonic()
+                last_stats_broadcast = 0.0
                 for page in crawler.crawl(urls):
                     if self.stop_event.is_set():
                         break
@@ -1131,8 +1132,14 @@ class JobManager:
 
                         self.log("INFO", f"[depth {page.depth}] Saved {page.url} -> {filename} ({file_size} bytes)")
                         self.broadcast("page_saved", page_info)
-                        self.broadcast("stats", self.get_stats())
+                        now_stats = time.monotonic()
+                        if now_stats - last_stats_broadcast >= 0.25:
+                            self.broadcast("stats", self.get_stats())
+                            last_stats_broadcast = now_stats
             finally:
+                if hasattr(crawler, "flush_saved_files"):
+                    crawler.flush_saved_files()
+                self.broadcast("stats", self.get_stats())
                 writer.finalize()
                 if media_collector is not None:
                     json_m, csv_m = media_collector.write_manifests(out_path)

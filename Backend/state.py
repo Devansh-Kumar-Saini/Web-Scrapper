@@ -333,12 +333,8 @@ class CrawlStore(_SQLiteBase):
         with self._write() as conn:
             if max_total and max_total > 0:
                 row = conn.execute(
-                    "SELECT COUNT(*) AS total FROM ("
-                    "SELECT url FROM queue WHERE job_id=? "
-                    "UNION "
-                    "SELECT url FROM visited WHERE job_id=?"
-                    ")",
-                    (job_id, job_id),
+                    "SELECT COUNT(*) AS total FROM queue WHERE job_id=?",
+                    (job_id,),
                 ).fetchone()
                 total = int(row["total"] if row else 0)
             else:
@@ -713,9 +709,15 @@ class CrawlStore(_SQLiteBase):
         return row is not None
 
     def set_file(self, job_id: str, url: str, file: str) -> None:
+        self.set_file_many(job_id, [(url, file)])
+
+    def set_file_many(self, job_id: str, entries: Iterable[tuple[str, str]]) -> None:
+        items = [(file, job_id, url) for url, file in entries if url and file]
+        if not items:
+            return
         with self._write() as conn:
-            conn.execute(
-                "UPDATE visited SET file=? WHERE job_id=? AND url=?", (file, job_id, url)
+            conn.executemany(
+                "UPDATE visited SET file=? WHERE job_id=? AND url=?", items
             )
 
     def reset_queue(self, job_id: str) -> int:
