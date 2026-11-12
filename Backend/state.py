@@ -82,6 +82,9 @@ class _SQLiteBase:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-64000")
+        conn.execute("PRAGMA mmap_size=268435456")
         with self._lock:
             self._connections.append(conn)
         return conn
@@ -391,45 +394,6 @@ class CrawlStore(_SQLiteBase):
             > 0
         )
 
-    def claim(self, job_id: str, worker_id: str = "local", lease_seconds: float = 180.0) -> dict[str, Any] | None:
-        """Atomically claim the next ready URL for this worker."""
-        now = time.time()
-        now_iso = utc_now_iso()
-        with self._write() as conn:
-            # Recover work from workers that died mid-request.
-            conn.execute(
-                """
-                UPDATE queue
-                SET state='pending', claimed_by=NULL, claimed_at=NULL, updated_at=?
-                WHERE job_id=? AND state='claimed' AND COALESCE(claimed_at, 0) < ?
-                """,
-                (now_iso, job_id, now - (lease_seconds if lease_seconds > 0 else 180.0)),
-            )
-            row = conn.execute(
-                """
-                SELECT * FROM queue
-                WHERE job_id=? AND state='pending' AND available_at <= ?
-                ORDER BY priority DESC, rowid ASC
-                LIMIT 1
-                """,
-                (job_id, now),
-            ).fetchone()
-            if row is None:
-                return None
-            conn.execute(
-                """
-                UPDATE queue
-                SET state='claimed', claimed_by=?, claimed_at=?, updated_at=?
-                WHERE job_id=? AND url=? AND state='pending'
-                """,
-                (worker_id, now, now_iso, job_id, row["url"]),
-            )
-            item = dict(row)
-            item["state"] = "claimed"
-            item["claimed_by"] = worker_id
-            item["claimed_at"] = now
-            return item
-
     def claim_many(
         self,
         job_id: str,
@@ -437,13 +401,59 @@ class CrawlStore(_SQLiteBase):
         limit: int = 1,
         lease_seconds: float = 180.0,
     ) -> list[dict[str, Any]]:
-        claimed: list[dict[str, Any]] = []
-        for _ in range(max(0, int(limit))):
-            item = self.claim(job_id, worker_id=worker_id, lease_seconds=lease_seconds)
-            if item is None:
-                break
-            claimed.append(item)
-        return claimed
+        limit = max(0, int(limit))
+        if limit == 0:
+            return []
+        now = time.time()
+        now_iso = utc_now_iso()
+        with self._write() as conn:
+            # Recover work from workers that died mid-request (throttled to avoid per-claim scans).
+            last_rec = getattr(self, "_last_lease_recovery", 0.0)
+            recovery_interval = min(15.0, lease_seconds if lease_seconds > 0 else 180.0)
+            if now - last_rec >= recovery_interval:
+                conn.execute(
+                    """
+                    UPDATE queue
+                    SET state='pending', claimed_by=NULL, claimed_at=NULL, updated_at=?
+                    WHERE job_id=? AND state='claimed' AND COALESCE(claimed_at, 0) < ?
+                    """,
+                    (now_iso, job_id, now - (lease_seconds if lease_seconds > 0 else 180.0)),
+                )
+                self._last_lease_recovery = now
+
+            rows = conn.execute(
+                """
+                SELECT * FROM queue
+                WHERE job_id=? AND state='pending' AND available_at <= ?
+                ORDER BY priority DESC, rowid ASC
+                LIMIT ?
+                """,
+                (job_id, now, limit),
+            ).fetchall()
+            if not rows:
+                return []
+
+            items = [dict(row) for row in rows]
+            urls = [it["url"] for it in items]
+            placeholders = ", ".join("?" for _ in urls)
+            conn.execute(
+                f"""
+                UPDATE queue
+                SET state='claimed', claimed_by=?, claimed_at=?, updated_at=?
+                WHERE job_id=? AND state='pending' AND url IN ({placeholders})
+                """,
+                [worker_id, now, now_iso, job_id, *urls],
+            )
+            for item in items:
+                item["state"] = "claimed"
+                item["claimed_by"] = worker_id
+                item["claimed_at"] = now
+            return items
+
+    def claim(self, job_id: str, worker_id: str = "local", lease_seconds: float = 180.0) -> dict[str, Any] | None:
+        """Atomically claim the next ready URL for this worker."""
+        items = self.claim_many(job_id, worker_id=worker_id, limit=1, lease_seconds=lease_seconds)
+        return items[0] if items else None
 
     def defer(self, job_id: str, url: str, delay_seconds: float, reason: str = "") -> None:
         """Return a claimed URL to the queue for a later attempt."""

@@ -1013,17 +1013,20 @@ class JobManager:
                 if media_collector is not None:
                     media_collector.session = crawler.fetcher.session
 
+                last_qstats_update = time.monotonic()
                 for page in crawler.crawl(urls):
                     if self.stop_event.is_set():
                         break
 
+                    now_mono = time.monotonic()
                     with self.lock:
                         self.state.current_url = page.url
                         self.state.current_depth = page.depth
                         self.state.pages_crawled += 1
-                        if store is not None and job_id:
+                        if store is not None and job_id and (now_mono - last_qstats_update >= 1.0):
                             try:
                                 self.state.queue_stats = store.queue_stats(job_id)
+                                last_qstats_update = now_mono
                             except Exception:
                                 pass
 

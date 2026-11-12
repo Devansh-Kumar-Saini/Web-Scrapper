@@ -717,18 +717,19 @@ class Crawler:
                 self.logger.info("Resumed job %s (%d in-flight URL(s) requeued)", job_id, requeued)
 
         seed_domains = self._seed_domains(seeds)
+        seed_entries = []
         for seed in seeds:
             normalized = normalize_url(seed)
             if not normalized:
                 continue
-            store.enqueue(
-                job_id,
+            seed_entries.append((
                 normalized,
                 0,
                 _root_domain(normalized),
-                lastmod=self._sitemap_lastmods.get(normalized, ""),
-                max_total=self.max_pages,
-            )
+                self._sitemap_lastmods.get(normalized, ""),
+            ))
+        if seed_entries:
+            store.enqueue_many(job_id, seed_entries, max_total=self.max_pages)
 
         queue = store.queue_stats(job_id)
         self.logger.info(
@@ -750,6 +751,7 @@ class Crawler:
         if outcome["kind"] not in {"page", "unchanged"}:
             return
         parent_depth = int(outcome.get("depth", 0))
+        entries: list[tuple[str, int, str, str]] = []
         for candidate in outcome.get("links", []):
             reason = self.url_filter.excluded_by(candidate)
             if reason:
@@ -757,14 +759,14 @@ class Crawler:
                     self.skipped_reasons.append(f"{reason}: {candidate}")
                 self.logger.info("Skipped %s (%s)", candidate, reason)
                 continue
-            self.store.enqueue(
-                self.job_id,
+            entries.append((
                 candidate,
                 parent_depth + 1,
                 _root_domain(candidate),
-                lastmod=self._sitemap_lastmods.get(candidate, ""),
-                max_total=self.max_pages,
-            )
+                self._sitemap_lastmods.get(candidate, ""),
+            ))
+        if entries:
+            self.store.enqueue_many(self.job_id, entries, max_total=self.max_pages)
 
     def _persistent_finish(self, outcome: dict[str, Any], claimed: dict[str, Any]) -> None:
         """Persist completion, retry, or DLQ state for one claimed URL."""
@@ -886,6 +888,7 @@ class Crawler:
     def _crawl_persistent_sequential(self, seed_domains: set[str]) -> Iterator[Page]:
         assert self.store is not None
         job_id = self.job_id or ""
+        last_stats_flush = time.monotonic()
         while True:
             if self.stop_event and self.stop_event.is_set():
                 self.logger.info("Crawl stopped by request.")
@@ -904,7 +907,10 @@ class Crawler:
                 break
             self._persistent_enqueue(outcome, seed_domains)
             self._persistent_finish(outcome, claimed)
-            self.store.update_job(job_id, stats=self.stats)
+            now_mono = time.monotonic()
+            if now_mono - last_stats_flush >= 1.0:
+                self.store.update_job(job_id, stats=self.stats)
+                last_stats_flush = now_mono
             page = outcome.get("page")
             if page is not None:
                 if self.on_page_crawled:
@@ -929,17 +935,17 @@ class Crawler:
             return self._fetch_outcome(claimed["url"], claimed["depth"], seed_domains)
 
         def schedule() -> int:
-            scheduled = 0
-            while len(active) < self.concurrency and not (self.stop_event and self.stop_event.is_set()):
-                claimed = store.claim(job_id, worker_id=self.worker_id)
-                if claimed is None:
-                    break
+            needed = self.concurrency - len(active)
+            if needed <= 0 or (self.stop_event and self.stop_event.is_set()):
+                return 0
+            claimed_list = store.claim_many(job_id, worker_id=self.worker_id, limit=needed)
+            for claimed in claimed_list:
                 fut = executor.submit(worker_task, claimed)
                 active[fut] = claimed
-                scheduled += 1
-            return scheduled
+            return len(claimed_list)
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency)
+        last_stats_flush = time.monotonic()
         try:
             schedule()
             while True:
@@ -982,7 +988,10 @@ class Crawler:
                         page = outcome.get("page")
                         if page is not None:
                             pages_to_yield.append(page)
-                    store.update_job(job_id, stats=self.stats)
+                    now_mono = time.monotonic()
+                    if now_mono - last_stats_flush >= 1.0:
+                        store.update_job(job_id, stats=self.stats)
+                        last_stats_flush = now_mono
                     schedule()
 
                 for page in pages_to_yield:

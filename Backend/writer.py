@@ -6,6 +6,7 @@ import csv
 import json
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -146,6 +147,13 @@ class OutputWriter:
                                 self._url_entries[url] = item
             except Exception:
                 pass
+        try:
+            for p in self.output_dir.iterdir():
+                if p.is_file():
+                    self._used_names.add(p.name)
+        except Exception:
+            pass
+        self._last_manifest_flush: float = 0.0
 
     def _filename(self, url: str) -> str:
         if self.incremental:
@@ -158,7 +166,7 @@ class OutputWriter:
         suffix = _SUFFIXES[self.output_format]
         candidate = f"{stem}{suffix}"
         counter = 2
-        while candidate in self._used_names or (self.output_dir / candidate).exists():
+        while candidate in self._used_names:
             candidate = f"{stem}_{counter}{suffix}"
             counter += 1
         self._used_names.add(candidate)
@@ -186,6 +194,8 @@ class OutputWriter:
     def _get_sqlite(self) -> sqlite3.Connection:
         if self._sqlite_connection is None:
             connection = sqlite3.connect(self.output_dir / _SQLITE_FILENAME)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(_SQLITE_SCHEMA)
             connection.commit()
             self._sqlite_connection = connection
@@ -299,7 +309,11 @@ class OutputWriter:
         self._flush_manifest()
         return filename
 
-    def _flush_manifest(self) -> None:
+    def _flush_manifest(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and hasattr(self, "_last_manifest_flush") and (now - self._last_manifest_flush < 1.0) and (len(self.manifest) % 25 != 0):
+            return
+        self._last_manifest_flush = now
         try:
             (self.output_dir / "index.json").write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
         except Exception:
@@ -316,6 +330,6 @@ class OutputWriter:
                 self._sqlite_connection.close()
             finally:
                 self._sqlite_connection = None
-        self._flush_manifest()
+        self._flush_manifest(force=True)
         self.files_written += 1
         self.written_files.add("index.json")

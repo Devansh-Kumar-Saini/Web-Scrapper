@@ -245,13 +245,13 @@ class Fetcher:
                 self.logger.warning("Failed to initialize curl_cffi with impersonate='%s': %s", target_imp, exc)
                 sess = requests.Session()
                 if hasattr(sess, "mount"):
-                    adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+                    adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=1)
                     sess.mount("https://", adapter)
                     sess.mount("http://", adapter)
         else:
             sess = requests.Session()
             if hasattr(sess, "mount"):
-                adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+                adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=1)
                 sess.mount("https://", adapter)
                 sess.mount("http://", adapter)
 

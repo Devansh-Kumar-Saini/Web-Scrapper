@@ -268,25 +268,51 @@ def _element_text(element: Tag) -> str:
     return _normalize(element.get_text("", strip=False))
 
 
-def _meta_content(soup: BeautifulSoup, *names: str) -> str:
+def _collect_meta_tags(soup: BeautifulSoup) -> dict[str, str]:
+    meta_map: dict[str, str] = {}
+    for tag in soup.find_all("meta"):
+        content = tag.get("content")
+        if not content:
+            continue
+        val = _normalize(str(content))
+        if not val:
+            continue
+        for key in ("name", "property", "itemprop"):
+            attr_val = tag.get(key)
+            if attr_val:
+                attr_key = str(attr_val).strip()
+                if attr_key not in meta_map:
+                    meta_map[attr_key] = val
+                    meta_map[attr_key.lower()] = val
+    return meta_map
+
+
+def _meta_content(soup_or_map: BeautifulSoup | dict[str, str], *names: str) -> str:
+    if isinstance(soup_or_map, dict):
+        for name in names:
+            if name in soup_or_map:
+                return soup_or_map[name]
+            if name.lower() in soup_or_map:
+                return soup_or_map[name.lower()]
+        return ""
+    meta_map = _collect_meta_tags(soup_or_map)
     for name in names:
-        for attrs in ({"name": name}, {"property": name}, {"itemprop": name}):
-            tag = soup.find("meta", attrs=attrs)
-            if tag and tag.get("content"):
-                value = _normalize(str(tag["content"]))
-                if value:
-                    return value
+        if name in meta_map:
+            return meta_map[name]
+        if name.lower() in meta_map:
+            return meta_map[name.lower()]
     return ""
 
 
 def _document_metadata(soup: BeautifulSoup) -> dict[str, str]:
+    meta_map = _collect_meta_tags(soup)
     title = ""
     if soup.title:
         title = _normalize(soup.title.get_text(" ", strip=True))
-    title = title or _meta_content(soup, "og:title", "twitter:title") or "Untitled page"
+    title = title or _meta_content(meta_map, "og:title", "twitter:title") or "Untitled page"
 
     published = _meta_content(
-        soup,
+        meta_map,
         "article:published_time",
         "og:published_time",
         "datePublished",
@@ -306,8 +332,8 @@ def _document_metadata(soup: BeautifulSoup) -> dict[str, str]:
 
     return {
         "title": title,
-        "description": _meta_content(soup, "description", "og:description", "twitter:description"),
-        "author": _meta_content(soup, "author", "article:author", "og:article:author", "twitter:creator"),
+        "description": _meta_content(meta_map, "description", "og:description", "twitter:description"),
+        "author": _meta_content(meta_map, "author", "article:author", "og:article:author", "twitter:creator"),
         "published_time": published,
         "canonical_url": canonical,
     }
