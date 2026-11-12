@@ -589,7 +589,7 @@ class Crawler:
                 if reason:
                     with self._stats_lock:
                         self.skipped_reasons.append(f"{reason}: {candidate}")
-                    self.logger.info("Skipped %s (%s)", candidate, reason)
+                    self.logger.debug("Skipped %s (%s)", candidate, reason)
                     continue
                 if queued_count < self.max_pages:
                     queued_count += 1
@@ -597,6 +597,7 @@ class Crawler:
 
     def _crawl_concurrent(self, seeds: list[str]) -> Iterator[Page]:
         import concurrent.futures
+        import queue
 
         frontier: deque[tuple[str, int, str]] = deque()
         seen: set[str] = set()
@@ -610,6 +611,8 @@ class Crawler:
 
         state_lock = threading.Lock()
         active_futures: set[concurrent.futures.Future] = set()
+        page_queue: queue.Queue[Page | None] = queue.Queue(maxsize=max(50, self.concurrency * 2))
+        scheduler_done = threading.Event()
 
         def worker_task(url: str, depth: int, seed_domain: str) -> dict[str, Any]:
             if self.stop_event and self.stop_event.is_set():
@@ -617,77 +620,100 @@ class Crawler:
             return self._fetch_outcome(url, depth, seed_domains)
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency)
-        try:
-            nonlocal_queued = queued_count
+        nonlocal_queued = queued_count
 
-            def schedule_workers() -> None:
-                nonlocal nonlocal_queued
-                while frontier and len(active_futures) < self.concurrency and not (
-                    self.stop_event and self.stop_event.is_set()
-                ):
-                    u, d, s = frontier.popleft()
-                    fut = executor.submit(worker_task, u, d, s)
-                    active_futures.add(fut)
+        def schedule_workers() -> None:
+            nonlocal nonlocal_queued
+            while frontier and len(active_futures) < self.concurrency and not (
+                self.stop_event and self.stop_event.is_set()
+            ):
+                u, d, s = frontier.popleft()
+                fut = executor.submit(worker_task, u, d, s)
+                active_futures.add(fut)
 
-            with state_lock:
-                schedule_workers()
-
-            while True:
-                if self.stop_event and self.stop_event.is_set():
-                    self.logger.info("Crawl stopped by request.")
-                    break
-
+        def scheduler_loop() -> None:
+            nonlocal nonlocal_queued
+            try:
                 with state_lock:
-                    if not active_futures and not frontier:
-                        break
-                    current_active = list(active_futures)
-
-                done, _ = concurrent.futures.wait(
-                    current_active,
-                    timeout=0.05,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-
-                pages_to_yield: list[Page] = []
-                with state_lock:
-                    for fut in done:
-                        active_futures.discard(fut)
-                        try:
-                            outcome = fut.result()
-                        except Exception as exc:
-                            self.logger.warning("Worker task error: %s", exc)
-                            outcome = {"kind": "failed", "url": "", "error_type": "other", "message": str(exc)}
-
-                        page = outcome.get("page")
-                        if page is not None:
-                            pages_to_yield.append(page)
-
-                        if outcome["kind"] in {"page", "unchanged"} and not (
-                            self.stop_event and self.stop_event.is_set()
-                        ):
-                            parent_depth = int(outcome.get("depth", 0))
-                            for candidate in outcome.get("links", []):
-                                if candidate in seen:
-                                    continue
-                                seen.add(candidate)
-                                reason = self.url_filter.excluded_by(candidate)
-                                if reason:
-                                    with self._stats_lock:
-                                        self.skipped_reasons.append(f"{reason}: {candidate}")
-                                    self.logger.info("Skipped %s (%s)", candidate, reason)
-                                    continue
-                                if nonlocal_queued < self.max_pages:
-                                    nonlocal_queued += 1
-                                    frontier.append((candidate, parent_depth + 1, _root_domain(candidate)))
-
                     schedule_workers()
+                while not (self.stop_event and self.stop_event.is_set()):
+                    with state_lock:
+                        if not active_futures and not frontier:
+                            break
+                        current_active = list(active_futures)
 
-                for page in pages_to_yield:
-                    if self.on_page_crawled:
-                        self.on_page_crawled(page)
-                    yield page
+                    done, _ = concurrent.futures.wait(
+                        current_active,
+                        timeout=0.02,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    with state_lock:
+                        for fut in done:
+                            active_futures.discard(fut)
+                            try:
+                                outcome = fut.result()
+                            except Exception as exc:
+                                self.logger.warning("Worker task error: %s", exc)
+                                outcome = {"kind": "failed", "url": "", "error_type": "other", "message": str(exc)}
+
+                            page = outcome.get("page")
+                            if page is not None:
+                                page_queue.put(page)
+
+                            if outcome.get("kind") in {"page", "unchanged"} and not (
+                                self.stop_event and self.stop_event.is_set()
+                            ):
+                                parent_depth = int(outcome.get("depth", 0))
+                                for candidate in outcome.get("links", []):
+                                    if candidate in seen:
+                                        continue
+                                    seen.add(candidate)
+                                    reason = self.url_filter.excluded_by(candidate)
+                                    if reason:
+                                        with self._stats_lock:
+                                            self.skipped_reasons.append(f"{reason}: {candidate}")
+                                        self.logger.debug("Skipped %s (%s)", candidate, reason)
+                                        continue
+                                    if nonlocal_queued < self.max_pages:
+                                        nonlocal_queued += 1
+                                        frontier.append((candidate, parent_depth + 1, _root_domain(candidate)))
+
+                        schedule_workers()
+            except Exception as exc:
+                self.logger.warning("In-memory scheduler error: %s", exc)
+            finally:
+                scheduler_done.set()
+                page_queue.put(None)
+
+        scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
+        scheduler_thread.start()
+
+        try:
+            while True:
+                try:
+                    page = page_queue.get(timeout=0.05)
+                except queue.Empty:
+                    if scheduler_done.is_set():
+                        break
+                    continue
+                if page is None:
+                    break
+                if self.on_page_crawled:
+                    self.on_page_crawled(page)
+                yield page
         finally:
+            if not scheduler_done.is_set():
+                if self.stop_event:
+                    self.stop_event.set()
+            scheduler_thread.join(timeout=2.0)
             with state_lock:
+                for fut in active_futures:
+                    fut.cancel()
+                active_futures.clear()
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=False)
                 for fut in active_futures:
                     fut.cancel()
                 active_futures.clear()
@@ -758,7 +784,7 @@ class Crawler:
             if reason:
                 with self._stats_lock:
                     self.skipped_reasons.append(f"{reason}: {candidate}")
-                self.logger.info("Skipped %s (%s)", candidate, reason)
+                self.logger.debug("Skipped %s (%s)", candidate, reason)
                 continue
             cand_depth = parent_depth + 1
             # Prioritize shallower hub/pagination pages so workers never starve waiting for links

@@ -1472,6 +1472,9 @@
     return normalizeLogLevel(entryLevel) === normalizeLogLevel(filter);
   }
 
+  let logRenderRaf = null;
+  let pendingLogEntries = [];
+
   function appendLogEntry(entry) {
     state.allLogs.push(entry);
     if (state.allLogs.length > 600) state.allLogs.shift();
@@ -1479,7 +1482,10 @@
     if (navLogBadge) navLogBadge.textContent = state.allLogs.length;
 
     if (matchesLogFilter(entry.level, state.currentLogFilter)) {
-      renderLogDOM(entry);
+      pendingLogEntries.push(entry);
+      if (!logRenderRaf) {
+        logRenderRaf = requestAnimationFrame(flushLogDOM);
+      }
     }
 
     if (terminalCounter) {
@@ -1516,15 +1522,19 @@
     return row;
   }
 
-  function renderLogDOM(entry) {
-    if (!terminalConsole) return;
-    const row = createLogRowElement(entry);
-    terminalConsole.appendChild(row);
-
+  function flushLogDOM() {
+    logRenderRaf = null;
+    if (!terminalConsole || !pendingLogEntries.length) return;
+    const batch = pendingLogEntries.slice(-100);
+    pendingLogEntries = [];
+    const frag = document.createDocumentFragment();
+    for (const ent of batch) {
+      frag.appendChild(createLogRowElement(ent));
+    }
+    terminalConsole.appendChild(frag);
     while (terminalConsole.children.length > 400) {
       terminalConsole.removeChild(terminalConsole.firstChild);
     }
-
     requestConsoleScroll();
   }
 

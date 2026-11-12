@@ -465,9 +465,12 @@ class Fetcher:
                 category = classify_error(None, status_code)
                 last_category = category
                 retry_after = _parse_retry_after(getattr(response, "headers", {}).get("Retry-After"))
-                self.circuit.record_failure(domain)
-                if not self.circuit.allow(domain):
-                    self.logger.warning("Circuit breaker opened for %s after HTTP %s", domain, status_code)
+                if status_code >= 500 or status_code == 429:
+                    self.circuit.record_failure(domain)
+                    if not self.circuit.allow(domain):
+                        self.logger.warning("Circuit breaker opened for %s after HTTP %s", domain, status_code)
+                else:
+                    self.circuit.record_success(domain)
                 if self.retry_policy.should_retry(category, attempt):
                     _backoff(category, attempt, retry_after)
                     continue
@@ -481,7 +484,7 @@ class Fetcher:
 
             content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).split(";", 1)[0].lower()
             if content_type and content_type not in HTML_CONTENT_TYPES:
-                self.logger.info("Skipped non-HTML resource %s (%s)", url, content_type)
+                self.logger.debug("Skipped non-HTML resource %s (%s)", url, content_type)
                 self.circuit.record_success(domain)
                 if self.rate_limiter is not None:
                     self.rate_limiter.record_success(domain)
