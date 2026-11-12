@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import csv
-import io
 import json
 import logging
-import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 from urllib.parse import unquote, urldefrag, urljoin, urlparse
@@ -379,7 +377,7 @@ def download_media_file(
     max_bytes: int = 150 * 1024 * 1024,
 ) -> bool:
     """Download a single media asset to disk inside ``output_dir/media/<media_type>/``.
-    
+
     Supports both requests and curl_cffi sessions with streaming.
     """
     try:

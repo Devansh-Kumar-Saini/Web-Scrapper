@@ -133,6 +133,97 @@ class TestFetcherPhase2(unittest.TestCase):
         fetcher.close()
 
 
+class _FakeSession:
+    """Minimal stand-in for ``requests.Session`` used by ``Fetcher._get_session``."""
+
+    instances: list["_FakeSession"] = []
+    calls: list[str] = []
+
+    def __init__(self, *args, **kwargs):
+        self.headers = {}
+        self.proxies = {}
+        self.mounted = []
+        self.closed = False
+        _FakeSession.instances.append(self)
+
+    def mount(self, prefix, adapter):
+        self.mounted.append(prefix)
+
+    def get(self, url, timeout=None, allow_redirects=True):
+        _FakeSession.calls.append(url)
+        return MagicMock(status_code=200, text="User-agent: *\nAllow: /\n")
+
+    def close(self):
+        self.closed = True
+
+
+class TestFetcherRobotsLocking(unittest.TestCase):
+    """Regression tests for the robots.txt locking used by concurrent crawls."""
+
+    def setUp(self):
+        _FakeSession.instances = []
+        _FakeSession.calls = []
+
+    def _fetcher(self):
+        return Fetcher(respect_robots=True, delay=0)
+
+    def test_robots_lookup_does_not_deadlock(self):
+        # Regression: _robots_for() held Fetcher._lock while _get_session()
+        # tried to acquire the same lock, hanging every crawl (and CI) forever.
+        with patch("Backend.fetcher.requests.Session", _FakeSession):
+            fetcher = self._fetcher()
+            outcome: dict[str, bool] = {}
+            worker = threading.Thread(
+                target=lambda: outcome.update(allowed=fetcher.can_fetch("https://example.com/page"))
+            )
+            worker.start()
+            worker.join(timeout=5)
+
+            self.assertFalse(worker.is_alive(), "robots.txt lookup deadlocked")
+            self.assertTrue(outcome.get("allowed"))
+            fetcher.close()
+
+    def test_robots_cached_per_origin(self):
+        with patch("Backend.fetcher.requests.Session", _FakeSession):
+            fetcher = self._fetcher()
+            self.assertTrue(fetcher.can_fetch("https://example.com/one"))
+            self.assertTrue(fetcher.can_fetch("https://example.com/two"))
+            self.assertEqual(len(_FakeSession.calls), 1)
+
+            self.assertTrue(fetcher.can_fetch("https://other.example.org/page"))
+            self.assertEqual(len(_FakeSession.calls), 2)
+            fetcher.close()
+
+    def test_robots_fetch_concurrent_origins(self):
+        with patch("Backend.fetcher.requests.Session", _FakeSession):
+            fetcher = self._fetcher()
+            errors: list[BaseException] = []
+
+            def check(url: str) -> None:
+                try:
+                    fetcher.can_fetch(url)
+                except BaseException as exc:  # pragma: no cover - surfaced by assertion
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=check, args=(url,))
+                for url in (
+                    "https://a.example.com/page",
+                    "https://b.example.com/page",
+                    "https://c.example.com/page",
+                )
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+            self.assertFalse(any(t.is_alive() for t in threads), "concurrent robots lookups deadlocked")
+            self.assertEqual(errors, [])
+            self.assertEqual(len(_FakeSession.calls), 3)
+            fetcher.close()
+
+
 class TestConcurrentCrawler(unittest.TestCase):
     def test_concurrent_crawl_success(self):
         logger = logging.getLogger("test_crawler")

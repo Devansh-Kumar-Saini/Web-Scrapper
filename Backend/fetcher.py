@@ -113,9 +113,12 @@ class Fetcher:
         self._thread_local = threading.local()
         self.is_curl_cffi = bool(impersonate and HAS_CURL_CFFI)
         self._robots: dict[str, RobotFileParser] = {}
+        self._robots_locks: dict[str, threading.Lock] = {}
         self._last_request: dict[str, float] = {}
         self._active_sessions: list[Any] = []
-        self._lock = threading.Lock()
+        # Re-entrant: helpers called while a lock is held (e.g. _get_session from
+        # _robots_for) must not be able to deadlock the calling thread.
+        self._lock = threading.RLock()
 
     @property
     def session(self) -> Any:
@@ -162,12 +165,26 @@ class Fetcher:
     def _robots_for(self, url: str) -> RobotFileParser:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
+
         with self._lock:
-            if origin in self._robots:
-                return self._robots[origin]
+            cached = self._robots.get(origin)
+            if cached is not None:
+                return cached
+            # One lock per origin: concurrent workers for the same site wait for a
+            # single robots.txt fetch instead of issuing duplicate requests.
+            origin_lock = self._robots_locks.setdefault(origin, threading.Lock())
+
+        with origin_lock:
+            # Another thread may have populated the cache while we waited.
+            with self._lock:
+                cached = self._robots.get(origin)
+                if cached is not None:
+                    return cached
 
             parser = RobotFileParser()
             parser.set_url(f"{origin}/robots.txt")
+            # Fetch outside the shared lock so a slow robots.txt for one origin
+            # never blocks workers on other origins.
             session = self._get_session()
             try:
                 response = session.get(f"{origin}/robots.txt", timeout=REQUEST_TIMEOUT, allow_redirects=True)
@@ -180,7 +197,9 @@ class Fetcher:
                 self.logger.warning("Could not read robots.txt for %s: %s", origin, exc)
                 parser.parse([])
 
-            self._robots[origin] = parser
+            with self._lock:
+                self._robots[origin] = parser
+                self._robots_locks.pop(origin, None)
             return parser
 
     def can_fetch(self, url: str) -> bool:

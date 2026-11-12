@@ -19,6 +19,7 @@ jobs:
   test-local:
     name: Test Local (Python ${{ matrix.python-version }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -38,22 +39,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Every command that touches the network or starts a long-lived process is
+      # wrapped in `timeout` so a regression (e.g. a deadlock) fails the job in
+      # minutes instead of leaving it "in progress" until GitHub's 6-hour limit.
       - name: Run unit & integration test suite
-        run: python -m unittest discover tests
+        run: timeout 300 python -m unittest discover tests
 
       - name: Smoke test CLI
         run: |
-          python main.py --help
-          python main.py --url https://example.com --dry-run
+          timeout 60 python main.py --help
+          timeout 180 python main.py --url https://example.com --dry-run
 
       - name: Test Local Web Server Startup & Health
         run: |
           python main.py --ui --port 5000 &
           SERVER_PID=$!
+          trap 'kill -9 $SERVER_PID 2>/dev/null || true' EXIT
           # Poll health endpoint until healthy
           HEALTHY=0
           for i in $(seq 1 15); do
-            if curl -s http://127.0.0.1:5000/api/health | grep -q '"status":"ok"'; then
+            if curl -s --max-time 5 http://127.0.0.1:5000/api/health | grep -q '"status":"ok"'; then
               echo "Local server is healthy!"
               HEALTHY=1
               break
@@ -62,15 +67,14 @@ jobs:
           done
           if [ "$HEALTHY" -ne 1 ]; then
             echo "Local server failed to respond within 15 seconds"
-            kill -9 $SERVER_PID || true
             exit 1
           fi
-          curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
-          kill -9 $SERVER_PID || true
+          timeout 60 curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
 
   test-docker:
     name: Test Docker Build & Container Health
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -80,8 +84,8 @@ jobs:
 
       - name: Test CLI inside container
         run: |
-          docker run --rm website-scraper:test python main.py --help
-          docker run --rm website-scraper:test python main.py --url https://example.com --dry-run
+          timeout 120 docker run --rm website-scraper:test python main.py --help
+          timeout 300 docker run --rm website-scraper:test python main.py --url https://example.com --dry-run
 
       - name: Start Container with Port Mapping
         run: |
@@ -91,7 +95,7 @@ jobs:
         run: |
           HEALTHY=0
           for i in $(seq 1 30); do
-            HEALTH=$(curl -s http://127.0.0.1:5000/api/health || true)
+            HEALTH=$(curl -s --max-time 5 http://127.0.0.1:5000/api/health || true)
             if echo "$HEALTH" | grep -q '"status":"ok"'; then
               echo "Container HTTP endpoint is healthy: $HEALTH"
               HEALTHY=1
@@ -106,8 +110,8 @@ jobs:
             exit 1
           fi
           # Test both localhost and 127.0.0.1
-          curl -fsSL http://localhost:5000/api/health | grep -q '"status":"ok"'
-          curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
+          timeout 30 curl -fsSL http://localhost:5000/api/health | grep -q '"status":"ok"'
+          timeout 30 curl -fsSL http://127.0.0.1:5000/ | grep -i "Web Scraper"
 
       - name: Clean up test container
         if: always()
@@ -115,16 +119,28 @@ jobs:
 
       - name: Test Docker Compose
         run: |
+          trap 'docker compose down' EXIT
           docker compose up -d
-          sleep 4
-          curl -fsSL http://localhost:5000/api/health | grep -q '"status":"ok"'
-          docker compose down
+          HEALTHY=0
+          for i in $(seq 1 30); do
+            if curl -s --max-time 5 http://localhost:5000/api/health | grep -q '"status":"ok"'; then
+              HEALTHY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$HEALTHY" -ne 1 ]; then
+            docker compose logs
+            exit 1
+          fi
+          timeout 30 curl -fsSL http://localhost:5000/ | grep -i "Web Scraper"
 
   build-and-push:
     name: Build & Publish Multi-Arch Image
     needs: [test-local, test-docker]
     if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
