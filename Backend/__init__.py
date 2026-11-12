@@ -6,8 +6,10 @@ from .extractor import PageContent, chunk_text, extract_content, extract_structu
 from .fetcher import Fetcher, FetchError, NonHtmlContent, RobotsDisallowed
 from .filters import URLFilter
 from .renderer import PlaywrightRenderer
+from .retry import DomainCircuitBreaker, RetryPolicy, classify_error
 from .scraper import scrape_url
-from .sitemap import discover_sitemap_urls, fetch_sitemap_urls, parse_sitemap_xml
+from .sitemap import discover_sitemap_urls, fetch_sitemap_entries, fetch_sitemap_urls, parse_sitemap_entries, parse_sitemap_xml
+from .state import CrawlStore, DeltaCache, content_hash, default_state_path
 from .writer import OUTPUT_FORMATS, OutputWriter
 
 __all__ = [
@@ -22,6 +24,8 @@ __all__ = [
     "scrape_url",
     "discover_sitemap_urls",
     "fetch_sitemap_urls",
+    "fetch_sitemap_entries",
+    "parse_sitemap_entries",
     "parse_sitemap_xml",
     "Fetcher",
     "FetchError",
@@ -29,6 +33,13 @@ __all__ = [
     "RobotsDisallowed",
     "URLFilter",
     "PlaywrightRenderer",
+    "CrawlStore",
+    "DeltaCache",
+    "content_hash",
+    "default_state_path",
+    "DomainCircuitBreaker",
+    "RetryPolicy",
+    "classify_error",
     "OutputWriter",
     "OUTPUT_FORMATS",
     "DEFAULT_MAX_PAGES",

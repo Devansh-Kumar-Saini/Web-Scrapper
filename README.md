@@ -17,6 +17,10 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 - **Targeted extraction** using CSS or XPath selectors, plus selectors to strip ads, sidebars, and cookie banners.
 - **Custom schema extraction** via a JSON selector map (e.g. product title, price, images) saved with every page.
 - **Polite crawling**: per-domain pacing and `robots.txt` enforcement.
+- **Scale & Resilience (100% Local)**:
+  - **Incremental / Delta Crawling**: Smart change detection using SHA-256 content hashing, `ETag`/`Last-Modified` conditional requests, and sitemap `lastmod` timestamps to skip unchanged pages.
+  - **Durable Checkpointing & Resumption**: All crawl queue state, visited records, and progress are persisted locally in SQLite (`<output>/.scraper/crawl_state.db`) with zero external databases or API keys.
+  - **Dead-Letter Queue (DLQ) & Intelligent Retries**: Categorized failure queue with exponential backoff, per-domain circuit breakers, and 1-click retry for failed URLs.
 - **Media Extractor & Downloader**: Discovers and catalogs all images, PDFs, docs, presentations, and videos into `media_manifest.json` and `media_manifest.csv`, with optional local asset downloading.
 - **JavaScript rendering** via a lazily loaded, reusable local Playwright browser (optional).
 - **Live progress** in the web UI over Server-Sent Events (SSE).
@@ -148,6 +152,13 @@ python main.py
 | `--respect-robots` / `--no-respect-robots` | Enforce `robots.txt` | `True` |
 | `--concurrency` | Concurrent fetch workers | `5` |
 | `--delay` | Per-domain politeness delay in seconds | `0.2` |
+| `--incremental` | Delta crawl: only re-fetch/write changed pages (SHA-256 + ETag/Last-Mod) | `False` |
+| `--resume` | Resume an interrupted crawl from its local SQLite checkpoint (`<job-id>`) | None |
+| `--retry-failed` | Requeue only DLQ URLs from a checkpointed job and resume it (`<job-id>`) | None |
+| `--list-failures` | Print the dead-letter queue for a job and exit | None |
+| `--checkpoint` / `--no-checkpoint` | Persist crawl queue & visited state to SQLite | `True` |
+| `--max-retries` | Total attempts per URL before moving to DLQ | `2` |
+| `--adaptive-rate-limit` | Per-domain backoff on 429/5xx & circuit breaking | `True` |
 | `--sitemap` / `--no-sitemap` | Discover URLs from `sitemap.xml` | `False` |
 | `--sitemap-url` | Explicit sitemap URL to crawl | None |
 | `--impersonate` | `curl_cffi` TLS fingerprint (`chrome`, `safari`, `firefox`, `none`) | None |

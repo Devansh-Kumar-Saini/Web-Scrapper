@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
@@ -23,19 +26,51 @@ except ImportError:  # pragma: no cover
 
 try:
     from .config import (
+        DEFAULT_BACKOFF_BASE,
+        DEFAULT_BACKOFF_MAX,
+        DEFAULT_CIRCUIT_COOLDOWN,
+        DEFAULT_CIRCUIT_THRESHOLD,
+        DEFAULT_MAX_RETRIES,
         HTML_CONTENT_TYPES,
         REQUEST_DELAY_SECONDS,
         REQUEST_TIMEOUT,
-        RETRY_DELAY_SECONDS,
         USER_AGENT,
+    )
+    from .retry import (
+        CATEGORY_CIRCUIT_OPEN,
+        CATEGORY_NON_HTML,
+        CATEGORY_ROBOTS,
+        CATEGORY_STOPPED,
+        CATEGORY_UNKNOWN,
+        RETRYABLE_CATEGORIES,
+        AdaptiveRateLimiter,
+        DomainCircuitBreaker,
+        RetryPolicy,
+        classify_error,
     )
 except ImportError:  # pragma: no cover - direct script execution
     from config import (
+        DEFAULT_BACKOFF_BASE,
+        DEFAULT_BACKOFF_MAX,
+        DEFAULT_CIRCUIT_COOLDOWN,
+        DEFAULT_CIRCUIT_THRESHOLD,
+        DEFAULT_MAX_RETRIES,
         HTML_CONTENT_TYPES,
         REQUEST_DELAY_SECONDS,
         REQUEST_TIMEOUT,
-        RETRY_DELAY_SECONDS,
         USER_AGENT,
+    )
+    from retry import (
+        CATEGORY_CIRCUIT_OPEN,
+        CATEGORY_NON_HTML,
+        CATEGORY_ROBOTS,
+        CATEGORY_STOPPED,
+        CATEGORY_UNKNOWN,
+        RETRYABLE_CATEGORIES,
+        AdaptiveRateLimiter,
+        DomainCircuitBreaker,
+        RetryPolicy,
+        classify_error,
     )
 
 USER_AGENTS = [
@@ -63,18 +98,33 @@ DEFAULT_BROWSER_HEADERS = {
 class FetchError(Exception):
     """Base error for a failed fetch."""
 
-    def __init__(self, message: str, url: str = "", status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        url: str = "",
+        status_code: int | None = None,
+        error_type: str | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.url = url
         self.status_code = status_code
+        self.error_type = error_type or classify_error(self, status_code)
+        self.retry_after = retry_after
 
 
 class RobotsDisallowed(FetchError):
     """The target URL is disallowed by robots.txt."""
 
+    def __init__(self, message: str, url: str = "", status_code: int | None = None) -> None:
+        super().__init__(message, url, status_code, error_type=CATEGORY_ROBOTS)
+
 
 class NonHtmlContent(FetchError):
     """The server returned a non-HTML content type."""
+
+    def __init__(self, message: str, url: str = "", status_code: int | None = None) -> None:
+        super().__init__(message, url, status_code, error_type=CATEGORY_NON_HTML)
 
 
 @dataclass
@@ -84,6 +134,35 @@ class FetchResult:
     html: str
     status_code: int
     content_type: str
+    etag: str = ""
+    last_modified: str = ""
+    content_hash: str = ""
+    not_modified: bool = False
+
+
+def _parse_retry_after(value: Any) -> float | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+        if when is not None:
+            now = datetime.now(tz=when.tzinfo or timezone.utc)
+            return max(0.0, (when - now).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _content_hash(response: Any, text: str) -> str:
+    body = getattr(response, "content", None)
+    if isinstance(body, (bytes, bytearray)) and body:
+        return hashlib.sha256(bytes(body)).hexdigest()
+    return hashlib.sha256((text or "").encode("utf-8", errors="replace")).hexdigest()
 
 
 class Fetcher:
@@ -100,6 +179,14 @@ class Fetcher:
         impersonate: str | bool | None = None,
         proxy: str | None = None,
         rotate_user_agent: bool = False,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        backoff_base: float = DEFAULT_BACKOFF_BASE,
+        backoff_max: float = DEFAULT_BACKOFF_MAX,
+        circuit_threshold: int = DEFAULT_CIRCUIT_THRESHOLD,
+        circuit_cooldown: float = DEFAULT_CIRCUIT_COOLDOWN,
+        cache: Any = None,
+        conditional: bool = False,
+        adaptive_rate_limit: bool = True,
     ) -> None:
         self.logger = logger or logging.getLogger(__name__)
         self.respect_robots = respect_robots
@@ -109,6 +196,24 @@ class Fetcher:
         self.impersonate = impersonate
         self.proxy = proxy
         self.rotate_user_agent = rotate_user_agent
+        self.max_retries = max(0, int(max_retries))
+        self.retry_policy = RetryPolicy(
+            max_attempts=self.max_retries + 1,
+            base_delay=max(0.0, float(backoff_base)),
+            max_delay=max(0.1, float(backoff_max)),
+        )
+        self.circuit = DomainCircuitBreaker(
+            failure_threshold=circuit_threshold,
+            cooldown=circuit_cooldown,
+        )
+        self.adaptive_rate_limit = bool(adaptive_rate_limit)
+        self.rate_limiter = (
+            AdaptiveRateLimiter(self.delay, max_delay=max(1.0, float(backoff_max)))
+            if self.adaptive_rate_limit
+            else None
+        )
+        self.cache = cache
+        self.conditional = bool(conditional and cache is not None)
         self._custom_session = session
         self._thread_local = threading.local()
         self.is_curl_cffi = bool(impersonate and HAS_CURL_CFFI)
@@ -207,15 +312,18 @@ class Fetcher:
             return True
         return self._robots_for(url).can_fetch(self.user_agent, url)
 
-    # --- politeness ---
+    # --- politeness / adaptive pacing ---
 
     def _wait_for_domain(self, domain: str) -> None:
-        if self.delay <= 0 or (self.stop_event and self.stop_event.is_set()):
+        effective_delay = (
+            self.rate_limiter.delay_for(domain) if self.rate_limiter is not None else self.delay
+        )
+        if effective_delay <= 0 or (self.stop_event and self.stop_event.is_set()):
             return
         with self._lock:
             now = time.monotonic()
             last = self._last_request.get(domain, 0.0)
-            target = max(now, last + self.delay)
+            target = max(now, last + effective_delay)
             wait_time = target - now
             self._last_request[domain] = target
 
@@ -231,59 +339,176 @@ class Fetcher:
         else:
             time.sleep(seconds)
 
+    def _conditional_headers(self, url: str) -> dict[str, str]:
+        if not self.conditional or self.cache is None:
+            return {}
+        if hasattr(self.cache, "conditional_headers"):
+            try:
+                return dict(self.cache.conditional_headers(url) or {})
+            except Exception:
+                return {}
+        cached = self.cache.cache_get(url) if hasattr(self.cache, "cache_get") else None
+        if not cached:
+            return {}
+        headers: dict[str, str] = {}
+        if cached.get("etag"):
+            headers["If-None-Match"] = str(cached["etag"])
+        if cached.get("last_modified"):
+            headers["If-Modified-Since"] = str(cached["last_modified"])
+        return headers
+
+    def _cached_record(self, url: str) -> dict[str, Any]:
+        if self.cache is None:
+            return {}
+        try:
+            if hasattr(self.cache, "get"):
+                return dict(self.cache.get(url) or {})
+            if hasattr(self.cache, "cache_get"):
+                return dict(self.cache.cache_get(url) or {})
+        except Exception:
+            return {}
+        return {}
+
     # --- fetching ---
 
     def fetch(self, url: str) -> FetchResult:
         if self.stop_event and self.stop_event.is_set():
-            raise FetchError("Crawl stopped by request", url)
+            raise FetchError("Crawl stopped by request", url, error_type=CATEGORY_STOPPED)
 
         if not self.can_fetch(url):
             raise RobotsDisallowed("Disallowed by robots.txt", url)
 
-        domain = urlparse(url).netloc.lower()
-        last_error: Exception | None = None
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not self.circuit.allow(domain):
+            remaining = self.circuit.retry_after(domain)
+            raise FetchError(
+                f"Circuit breaker open for {domain}; retry in ~{max(1, int(remaining))}s",
+                url,
+                error_type=CATEGORY_CIRCUIT_OPEN,
+                retry_after=remaining,
+            )
 
         request_headers: dict[str, str] = {}
         if self.rotate_user_agent:
-            ua = random.choice(USER_AGENTS)
-            request_headers["User-Agent"] = ua
+            request_headers["User-Agent"] = random.choice(USER_AGENTS)
+        request_headers.update(self._conditional_headers(url))
 
-        for attempt in range(2):
+        total_attempts = self.max_retries + 1
+        last_error: Exception | None = None
+        last_status: int | None = None
+        last_category = "unknown"
+
+        def _backoff(category: str, attempt: int, retry_after: float | None = None) -> None:
+            if self.rate_limiter is not None:
+                self.rate_limiter.record_throttle(domain, retry_after)
+            delay = self.retry_policy.next_delay(attempt, retry_after)
+            self.logger.warning(
+                "%s for %s (%s); retrying in %.1fs", "Request failed", url, category, delay
+            )
+            self._sleep(delay)
+
+        for attempt in range(1, total_attempts + 1):
             if self.stop_event and self.stop_event.is_set():
-                raise FetchError("Crawl stopped by request", url)
+                raise FetchError("Crawl stopped by request", url, error_type=CATEGORY_STOPPED)
+
             self._wait_for_domain(domain)
             if self.stop_event and self.stop_event.is_set():
-                raise FetchError("Crawl stopped by request", url)
+                raise FetchError("Crawl stopped by request", url, error_type=CATEGORY_STOPPED)
 
             try:
                 get_kwargs: dict[str, Any] = {"timeout": REQUEST_TIMEOUT, "allow_redirects": True}
                 if request_headers:
                     get_kwargs["headers"] = request_headers
                 response = self.session.get(url, **get_kwargs)
-                response.raise_for_status()
-                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
-                if content_type and content_type not in HTML_CONTENT_TYPES:
-                    self.logger.info("Skipped non-HTML resource %s (%s)", url, content_type)
-                    raise NonHtmlContent(f"Non-HTML content type: {content_type}", url, response.status_code)
+            except Exception as exc:
+                last_error = exc
+                last_category = classify_error(exc)
+                if self.stop_event and self.stop_event.is_set():
+                    raise FetchError("Crawl stopped by request", url, error_type=CATEGORY_STOPPED) from exc
+                self.circuit.record_failure(domain)
+                if not self.circuit.allow(domain):
+                    self.logger.warning("Circuit breaker opened for %s after repeated failures", domain)
+                if not self.retry_policy.should_retry(last_category, attempt):
+                    raise FetchError(
+                        f"Request failed for {url}: {exc}",
+                        url,
+                        error_type=last_category,
+                    ) from exc
+                _backoff(last_category, attempt)
+                continue
+
+            try:
+                status_code = int(getattr(response, "status_code", 200) or 200)
+            except (TypeError, ValueError):
+                status_code = 200
+            last_status = status_code
+
+            if status_code == 304:
+                self.circuit.record_success(domain)
+                if self.rate_limiter is not None:
+                    self.rate_limiter.record_success(domain)
+                cached = self._cached_record(url)
                 return FetchResult(
                     requested_url=url,
                     final_url=getattr(response, "url", url) or url,
-                    html=response.text,
-                    status_code=response.status_code,
-                    content_type=content_type,
+                    html="",
+                    status_code=304,
+                    content_type="text/html",
+                    etag=str(cached.get("etag", "")),
+                    last_modified=str(cached.get("last_modified", "")),
+                    content_hash=str(cached.get("content_hash", "")),
+                    not_modified=True,
                 )
-            except NonHtmlContent:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if self.stop_event and self.stop_event.is_set():
-                    raise FetchError("Crawl stopped by request", url) from exc
-                if attempt == 0:
-                    self.logger.warning("Request failed for %s; retrying: %s", url, exc)
-                    self._sleep(RETRY_DELAY_SECONDS)
 
-        status_code = getattr(getattr(last_error, "response", None), "status_code", None)
-        raise FetchError(f"Request failed for {url}: {last_error}", url, status_code) from last_error
+            if status_code >= 400:
+                category = classify_error(None, status_code)
+                last_category = category
+                retry_after = _parse_retry_after(getattr(response, "headers", {}).get("Retry-After"))
+                self.circuit.record_failure(domain)
+                if not self.circuit.allow(domain):
+                    self.logger.warning("Circuit breaker opened for %s after HTTP %s", domain, status_code)
+                if self.retry_policy.should_retry(category, attempt):
+                    _backoff(category, attempt, retry_after)
+                    continue
+                raise FetchError(
+                    f"Request failed for {url}: HTTP {status_code}",
+                    url,
+                    status_code=status_code,
+                    error_type=category,
+                    retry_after=retry_after,
+                )
+
+            content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).split(";", 1)[0].lower()
+            if content_type and content_type not in HTML_CONTENT_TYPES:
+                self.logger.info("Skipped non-HTML resource %s (%s)", url, content_type)
+                self.circuit.record_success(domain)
+                if self.rate_limiter is not None:
+                    self.rate_limiter.record_success(domain)
+                raise NonHtmlContent(f"Non-HTML content type: {content_type}", url, status_code)
+
+            text = str(getattr(response, "text", "") or "")
+            self.circuit.record_success(domain)
+            if self.rate_limiter is not None:
+                self.rate_limiter.record_success(domain)
+            headers = getattr(response, "headers", {}) or {}
+            return FetchResult(
+                requested_url=url,
+                final_url=getattr(response, "url", url) or url,
+                html=text,
+                status_code=status_code,
+                content_type=content_type,
+                etag=str(headers.get("ETag", "") or ""),
+                last_modified=str(headers.get("Last-Modified", "") or ""),
+                content_hash=_content_hash(response, text),
+            )
+
+        raise FetchError(
+            f"Request failed for {url}: {last_error}",
+            url,
+            last_status,
+            error_type=last_category,
+        ) from last_error
 
     def close(self) -> None:
         try:

@@ -34,6 +34,7 @@
     defaultOutputDir: "./output",
     discoveredMedia: [],
     mediaFilter: "",
+    currentJobId: "",
   };
 
   // --- DOM Element References ---
@@ -83,6 +84,17 @@
   const impersonateInput = document.getElementById("impersonateInput");
   const proxyInput = document.getElementById("proxyInput");
   const webhookUrlInput = document.getElementById("webhookUrlInput");
+  const incrementalInput = document.getElementById("incrementalInput");
+  const checkpointInput = document.getElementById("checkpointInput");
+  const adaptiveRateInput = document.getElementById("adaptiveRateInput");
+  const maxRetriesInput = document.getElementById("maxRetriesInput");
+  const resumeJobIdInput = document.getElementById("resumeJobIdInput");
+  const dlqInput = document.getElementById("dlqInput");
+  const dlqCard = document.getElementById("dlqCard");
+  const refreshDlqBtn = document.getElementById("refreshDlqBtn");
+  const retryDlqBtn = document.getElementById("retryDlqBtn");
+  const dlqList = document.getElementById("dlqList");
+  const dlqStatusText = document.getElementById("dlqStatusText");
   const outputDirInput = document.getElementById("outputDirInput");
   const outputDirHint = document.getElementById("outputDirHint");
   const browseDirBtn = document.getElementById("browseDirBtn");
@@ -277,6 +289,10 @@
       terminalConsole.scrollTop = terminalConsole.scrollHeight;
     }
 
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     if (pushHistory) {
       history.replaceState(null, "", `#${viewId}`);
     }
@@ -456,6 +472,9 @@
     if (sitemapActive || (sitemapUrlInput && sitemapUrlInput.value.trim())) flags.push("Sitemap");
     if (renderJsInput && renderJsInput.checked) flags.push("JS render");
     if (dryRunInput && dryRunInput.checked) flags.push("Dry run");
+    if (incrementalInput && incrementalInput.checked) flags.push("Incremental");
+    if (checkpointInput && checkpointInput.checked) flags.push("Checkpointed");
+    if (dlqInput && dlqInput.checked) flags.push("DLQ tracking");
     const flagText = flags.length ? ` · ${flags.join(" · ")}` : "";
     const schemaField = parseSchemaField(schemaInput);
     let schemaText = "";
@@ -474,7 +493,26 @@
   if (sitemapUrlInput) sitemapUrlInput.addEventListener("input", updateSetupSummary);
   if (renderJsInput) renderJsInput.addEventListener("change", updateSetupSummary);
   if (dryRunInput) dryRunInput.addEventListener("change", updateSetupSummary);
+  if (incrementalInput) incrementalInput.addEventListener("change", updateSetupSummary);
+  if (checkpointInput) checkpointInput.addEventListener("change", updateSetupSummary);
   if (schemaInput) schemaInput.addEventListener("input", updateSetupSummary);
+
+  function updateDlqVisibility() {
+    const isEnabled = dlqInput ? dlqInput.checked : false;
+    if (dlqCard) {
+      dlqCard.style.display = isEnabled ? "" : "none";
+    }
+    if (isEnabled && state.currentJobId) {
+      refreshFailures(state.currentJobId);
+    }
+  }
+
+  if (dlqInput) {
+    dlqInput.addEventListener("change", () => {
+      updateDlqVisibility();
+      updateSetupSummary();
+    });
+  }
 
   // Format Selection Cards
   formatCards.forEach((card) => {
@@ -676,6 +714,13 @@
     if (sitemapUrlInput) sitemapUrlInput.value = "";
     if (renderJsInput) renderJsInput.checked = false;
     if (dryRunInput) dryRunInput.checked = false;
+    if (incrementalInput) incrementalInput.checked = false;
+    if (checkpointInput) checkpointInput.checked = true;
+    if (adaptiveRateInput) adaptiveRateInput.checked = true;
+    if (maxRetriesInput) maxRetriesInput.value = 2;
+    if (resumeJobIdInput) resumeJobIdInput.value = "";
+    if (dlqInput) dlqInput.checked = false;
+    updateDlqVisibility();
     if (state.isContainer) {
       setSelectedOutputDir(state.defaultOutputDir, "Docker volume");
     } else {
@@ -728,7 +773,8 @@
     const urlsRaw = urlInput.value.trim();
     const sitemap = sitemapInput ? sitemapInput.checked : false;
     const sitemapUrl = sitemapUrlInput ? sitemapUrlInput.value.trim() : "";
-    if (!urlsRaw && !sitemapUrl) {
+    const resumeJobId = resumeJobIdInput ? resumeJobIdInput.value.trim() : "";
+    if (!urlsRaw && !sitemapUrl && !resumeJobId) {
       showToast("Enter a target URL or a custom sitemap URL in Crawl Setup.", "warn");
       switchView("viewCrawlSetup");
       urlInput.focus();
@@ -757,6 +803,11 @@
     const delay = delayInput ? (parseFloat(delayInput.value) >= 0 ? parseFloat(delayInput.value) : 0.2) : 0.2;
     const renderJs = renderJsInput ? renderJsInput.checked : false;
     const dryRun = dryRunInput ? dryRunInput.checked : false;
+    const incremental = incrementalInput ? incrementalInput.checked : false;
+    const checkpoint = checkpointInput ? checkpointInput.checked : true;
+    const adaptiveRateLimit = adaptiveRateInput ? adaptiveRateInput.checked : true;
+    const maxRetries = maxRetriesInput ? Math.max(1, parseInt(maxRetriesInput.value, 10) || 2) : 2;
+    const dlq = dlqInput ? dlqInput.checked : false;
     const impersonate = impersonateInput ? impersonateInput.value : "chrome";
     const proxy = proxyInput ? proxyInput.value.trim() : "";
     const webhookUrl = webhookUrlInput ? webhookUrlInput.value.trim() : "";
@@ -815,12 +866,24 @@
           media_mode: mediaMode,
           download_media: downloadMedia,
           media_types: mediaTypes,
+          incremental,
+          checkpoint,
+          adaptive_rate_limit: adaptiveRateLimit,
+          max_retries: maxRetries,
+          resume_job_id: resumeJobId,
+          dlq,
         }),
       });
 
       const data = await resp.json();
       if (!resp.ok) {
         throw new Error(data.error || "Failed to start crawler");
+      }
+      if (data.job_id) {
+        state.currentJobId = data.job_id;
+        if (dlq) {
+          refreshFailures(data.job_id);
+        }
       }
 
       showToast(dryRun ? "Dry run started! Discovering URLs..." : "Crawl job started successfully!", "success");
@@ -835,6 +898,83 @@
     } finally {
       setLaunchState(false);
     }
+  }
+
+  async function refreshFailures(jobId = state.currentJobId) {
+    if (!dlqList || !dlqCard) return;
+    if (dlqInput && !dlqInput.checked) return;
+    const params = new URLSearchParams();
+    if (jobId) params.set("job_id", jobId);
+    const outputDir = getSelectedOutputDir() || (state.isContainer ? state.defaultOutputDir : "");
+    if (outputDir) params.set("output_dir", outputDir);
+    try {
+      const resp = await fetch(`/api/scrape/failures?${params.toString()}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Could not load failures");
+      const failures = data.failures || [];
+      if (!failures.length) {
+        dlqStatusText.textContent = "No failures recorded";
+        dlqList.innerHTML = '<p class="input-desc">Failed URLs will appear here with their error category. Retrying resumes the same checkpoint and only re-runs this list.</p>';
+        retryDlqBtn.disabled = true;
+        return;
+      }
+      dlqStatusText.textContent = `${failures.length} failed URL(s) for job ${data.job_id || "(latest)"}`;
+      retryDlqBtn.disabled = false;
+      dlqList.innerHTML = "";
+      failures.slice(0, 100).forEach((failure) => {
+        const row = document.createElement("div");
+        row.className = "dlq-row";
+        const badge = document.createElement("span");
+        badge.className = "dlq-badge";
+        badge.textContent = failure.error_category || "unknown";
+        const url = document.createElement("span");
+        url.className = "dlq-url";
+        url.textContent = failure.url || "";
+        const meta = document.createElement("span");
+        meta.className = "dlq-meta";
+        meta.textContent = `attempts ${failure.attempts || 0}${failure.status_code ? ` · HTTP ${failure.status_code}` : ""}`;
+        row.append(badge, url, meta);
+        row.title = failure.message || "";
+        dlqList.appendChild(row);
+      });
+      if (failures.length > 100) {
+        const more = document.createElement("p");
+        more.className = "input-desc";
+        more.textContent = `Showing the first 100 of ${failures.length} failed URLs.`;
+        dlqList.appendChild(more);
+      }
+    } catch (err) {
+      dlqStatusText.textContent = "Could not load failures";
+      console.warn(err);
+    }
+  }
+
+  if (refreshDlqBtn) {
+    refreshDlqBtn.addEventListener("click", () => refreshFailures());
+  }
+  if (retryDlqBtn) {
+    retryDlqBtn.addEventListener("click", async () => {
+      const outputDir = getSelectedOutputDir() || (state.isContainer ? state.defaultOutputDir : "");
+      retryDlqBtn.disabled = true;
+      try {
+        const resp = await fetch("/api/scrape/retry-failed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: state.currentJobId, output_dir: outputDir }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "Could not retry failed URLs");
+        showToast("Retrying failed URLs from the checkpoint...", "success");
+        state.isRunning = true;
+        updateStatus("running");
+        switchView("viewMonitor");
+        refreshFailures(data.job_id || state.currentJobId);
+      } catch (err) {
+        showToast(err.message, "error");
+      } finally {
+        retryDlqBtn.disabled = false;
+      }
+    });
   }
 
   function setLaunchState(loading) {
@@ -1140,8 +1280,18 @@
       try {
         const data = JSON.parse(e.data);
         syncSnapshot(data);
+        refreshFailures(data.job_id || state.currentJobId);
       } catch (err) {
         console.error("Failed to parse SSE completed:", err);
+      }
+    });
+
+    state.eventSource.addEventListener("dlq", (e) => {
+      try {
+        JSON.parse(e.data);
+        refreshFailures(state.currentJobId);
+      } catch (err) {
+        console.error("Failed to parse SSE dlq:", err);
       }
     });
 
@@ -1149,6 +1299,7 @@
       try {
         const data = JSON.parse(e.data);
         syncSnapshot(data);
+        refreshFailures(data.job_id || state.currentJobId);
       } catch (err) {
         console.error("Failed to parse SSE stopped:", err);
       }
@@ -1216,6 +1367,13 @@
 
   function syncSnapshot(snap) {
     if (!snap) return;
+    if (snap.job_id) {
+      state.currentJobId = snap.job_id;
+    }
+    if (snap.dlq !== undefined && dlqInput) {
+      dlqInput.checked = Boolean(snap.dlq);
+      updateDlqVisibility();
+    }
     applyStats(snap);
 
     if (snap.logs && Array.isArray(snap.logs) && state.allLogs.length === 0) {
@@ -2646,9 +2804,18 @@
     }
   }
 
+  // Defensively ensure the root browser window is never scrolled out of position.
+  // The viewport is fixed and only internal scroll containers (like .workspace) scroll.
+  window.addEventListener("scroll", () => {
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+  }, { passive: true });
+
   initTheme();
   initSidebarState();
   initMediaExtractor();
+  updateDlqVisibility();
   updateSetupSummary();
   initEnvironment().finally(() => {
     fetchSavedPages();

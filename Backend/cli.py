@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ try:
     from .filters import parse_patterns, parse_selectors
     from .media import MediaCollector, parse_media_types
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from .state import CrawlStore, DeltaCache, default_state_path
     from .webhook import notify, validate_webhook_url
     from .writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
 except ImportError:  # pragma: no cover - direct script execution
@@ -28,6 +30,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from filters import parse_patterns, parse_selectors
     from media import MediaCollector, parse_media_types
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from state import CrawlStore, DeltaCache, default_state_path
     from webhook import notify, validate_webhook_url
     from writer import _ROW_FIELDS, OUTPUT_FORMATS, OutputWriter, _document_row
 
@@ -247,6 +250,72 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Discover and print target URLs without fetching page bodies",
     )
+    # --- Phase 6: local resilience / incremental crawling -------------------
+    parser.add_argument(
+        "--incremental",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Only re-fetch and re-write pages whose content changed (SHA-256 + "
+            "ETag/Last-Modified conditional requests + sitemap lastmod)"
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        metavar="JOB_ID",
+        default=None,
+        help="Resume an interrupted crawl from its local SQLite checkpoint",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Persist queue/visited/failure state locally so crawls can resume (default: enabled)",
+    )
+    parser.add_argument(
+        "--state-db",
+        metavar="PATH",
+        default=None,
+        help="Path to the local crawl-state SQLite DB (default: <output-dir>/.scraper/crawl_state.db)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        metavar="N",
+        help="Total attempts per URL before moving it to the dead-letter queue (default: 2)",
+    )
+    parser.add_argument(
+        "--adaptive-rate-limit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Adapt per-domain delays with exponential backoff on 429/5xx responses (default: enabled)",
+    )
+    parser.add_argument(
+        "--dlq",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Track and report dead-letter queue failures (default: disabled)",
+    )
+    parser.add_argument(
+        "--retry-failed",
+        metavar="JOB_ID",
+        default=None,
+        help="Requeue only the failed URLs from a checkpointed job and resume it",
+    )
+    parser.add_argument(
+        "--list-failures",
+        metavar="JOB_ID",
+        nargs="?",
+        const="",
+        default=None,
+        help="Print the dead-letter queue for a job (or the latest job) and exit",
+    )
+    parser.add_argument(
+        "--worker-id",
+        default="",
+        help="Worker identifier used for distributed queue claims (default: auto-generated)",
+    )
     parser.add_argument(
         "--impersonate",
         choices=["chrome", "safari", "firefox", "none"],
@@ -301,6 +370,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.ui:
         return args
+    if any(getattr(args, name, None) for name in ("resume", "retry_failed")):
+        return args
+    if getattr(args, "list_failures", None) is not None:
+        return args
     if not args.url and not args.sitemap_url and sys.stdin.isatty():
         return _interactive(args)
     return args
@@ -314,6 +387,70 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     urls, invalid = _parse_urls(args.url or [])
+    resume_job_id = getattr(args, "resume", None)
+    retry_job_id = getattr(args, "retry_failed", None)
+    list_failures_job = getattr(args, "list_failures", None)
+    requested_resume = bool(resume_job_id or retry_job_id or list_failures_job is not None)
+
+    # Resolve a checkpointed job before logging/output paths so --resume and
+    # --retry-failed can restore the job's original output directory.
+    resume_store_path: Path | None = None
+    resume_job: dict[str, Any] | None = None
+    resume_action = "resume" if resume_job_id else ("retry" if retry_job_id else "list")
+    if requested_resume:
+        target_job_id = str(resume_job_id or retry_job_id or list_failures_job or "")
+        candidates: list[Path] = []
+        if getattr(args, "state_db", None):
+            candidates.append(Path(args.state_db).expanduser().resolve())
+        else:
+            candidates.append(default_state_path(args.output_dir))
+            candidates.append(default_state_path("./output"))
+        for candidate in dict.fromkeys(candidates):
+            if not candidate.exists():
+                continue
+            lookup = CrawlStore(candidate)
+            try:
+                job = lookup.get_job(target_job_id) if target_job_id else (
+                    (lookup.list_jobs(limit=1) or [None])[0]
+                )
+            finally:
+                lookup.close()
+            if job is not None:
+                resume_store_path = candidate
+                resume_job = job
+                break
+        if resume_job is None:
+            sys.stderr.write(
+                f"Could not find checkpointed job '{target_job_id or '(latest)'}'. "
+                f"Looked in: {', '.join(str(c) for c in dict.fromkeys(candidates))}\n"
+            )
+            return 2
+
+        cfg = dict(resume_job.get("config") or {})
+        job_output = str(resume_job.get("output_dir") or cfg.get("output_dir") or "")
+        if job_output:
+            args.output_dir = job_output
+        if not getattr(args, "state_db", None):
+            args.state_db = str(resume_store_path)
+        if not urls:
+            urls = list(cfg.get("urls") or [])
+        for key, value in cfg.items():
+            if key == "urls":
+                continue
+            if value is not None and hasattr(args, key):
+                setattr(args, key, value)
+        if resume_action == "retry":
+            retry_store = CrawlStore(resume_store_path)
+            try:
+                requeued = retry_store.requeue_failed(str(resume_job["job_id"]))
+            finally:
+                retry_store.close()
+            if requeued == 0:
+                sys.stderr.write(f"Job '{resume_job['job_id']}' has no failed URLs to retry.\n")
+                return 2
+            resume_job_id = str(resume_job["job_id"])
+            sys.stderr.write(f"Requeued {requeued} failed URL(s) for job {resume_job_id}.\n")
+
     output = Path(args.output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     log_path = output / "scrape_log.txt"
@@ -331,6 +468,27 @@ def run(args: argparse.Namespace) -> int:
         force=True,
     )
     logger = logging.getLogger("website_scraper")
+
+    if resume_action == "list" and requested_resume:
+        state_path = resume_store_path or default_state_path(output)
+        lookup = CrawlStore(state_path)
+        try:
+            failures = lookup.failures(str(resume_job["job_id"])) if resume_job else []
+            job_id_out = str(resume_job["job_id"]) if resume_job else ""
+        finally:
+            lookup.close()
+        if getattr(args, "json", False):
+            print(json.dumps({"job_id": job_id_out, "failures": failures}, indent=2))
+        else:
+            print(f"Dead-letter queue for job {job_id_out or '(none)'}: {len(failures)} URL(s)")
+            for failure in failures:
+                print(
+                    f"  - [{failure.get('error_category')}] {failure.get('url')} "
+                    f"(attempts={failure.get('attempts')}): {failure.get('message')}"
+                )
+        logging.shutdown()
+        return 0
+
     for value in invalid:
         logger.warning("Invalid URL skipped: %s", value)
     if not urls and not getattr(args, "sitemap_url", None):
@@ -433,6 +591,67 @@ def run(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     started_iso = datetime.now(timezone.utc).isoformat()
+    checkpoint_enabled = bool(getattr(args, "checkpoint", True)) or bool(resume_job_id)
+    incremental_enabled = bool(getattr(args, "incremental", False))
+    state_path = (
+        Path(args.state_db).expanduser().resolve()
+        if getattr(args, "state_db", None)
+        else default_state_path(output)
+    )
+    job_id = resume_job_id or uuid.uuid4().hex[:12]
+    store: CrawlStore | None = None
+    delta: DeltaCache | None = None
+    if checkpoint_enabled or incremental_enabled or resume_job_id:
+        try:
+            store = CrawlStore(state_path)
+            if resume_job_id:
+                store.update_job(job_id, status="running")
+            else:
+                store.create_job(
+                    job_id,
+                    output_dir=str(output),
+                    config={
+                        "urls": urls,
+                        "depth": args.depth,
+                        "max_pages": args.max_pages,
+                        "same_domain": args.same_domain,
+                        "output_dir": str(output),
+                        "output_format": args.format,
+                        "include_patterns": include_patterns,
+                        "exclude_patterns": exclude_patterns,
+                        "target_selector": args.target_selector,
+                        "exclude_selectors": exclude_selectors,
+                        "schema": schema_spec,
+                        "chunk_size": args.chunk_size,
+                        "chunk_overlap": args.chunk_overlap,
+                        "respect_robots": args.respect_robots,
+                        "concurrency": args.concurrency,
+                        "delay": getattr(args, "delay", REQUEST_DELAY_SECONDS),
+                        "sitemap": args.sitemap,
+                        "sitemap_url": args.sitemap_url,
+                        "impersonate": impersonate_val,
+                        "proxy": args.proxy,
+                        "render_js": getattr(args, "render_js", False),
+                        "incremental": incremental_enabled,
+                        "max_retries": getattr(args, "max_retries", 2),
+                        "adaptive_rate_limit": getattr(args, "adaptive_rate_limit", True),
+                        "output_format": args.format,
+                    },
+                    status="running",
+                )
+            if incremental_enabled:
+                delta = DeltaCache(state_path)
+            logger.info("Checkpointing enabled: job %s (%s)", job_id, state_path)
+            if incremental_enabled:
+                logger.info("Incremental mode enabled: SHA-256 + ETag/Last-Modified delta detection")
+            if resume_job_id:
+                logger.info("Resuming crawl job %s", job_id)
+        except Exception as exc:
+            logger.warning("Could not initialize crawl checkpoint: %s", exc)
+            store = None
+            delta = None
+            checkpoint_enabled = False
+
     media_only_flag = bool(getattr(args, "media_only", False))
     download_media_flag = bool(getattr(args, "download_media", False))
     extract_media_flag = bool(getattr(args, "extract_media", False)) or media_only_flag or download_media_flag
@@ -440,7 +659,12 @@ def run(args: argparse.Namespace) -> int:
     media_only = (media_mode == "media-only")
     media_types_set = parse_media_types(getattr(args, "media_types", None))
 
-    writer = OutputWriter(args.output_dir, args.format, media_only=media_only)
+    writer = OutputWriter(
+        args.output_dir,
+        args.format,
+        media_only=media_only,
+        incremental=incremental_enabled,
+    )
     media_collector = None
     if extract_media_flag:
         media_collector = MediaCollector(
@@ -464,8 +688,16 @@ def run(args: argparse.Namespace) -> int:
         impersonate=impersonate_val,
         proxy=args.proxy,
         render_js=getattr(args, "render_js", False),
+        store=store,
+        delta=delta,
+        job_id=job_id if store is not None else None,
+        resume=bool(resume_job_id),
+        worker_id=getattr(args, "worker_id", "") or "",
+        max_retries=max(1, int(getattr(args, "max_retries", 2) or 2)),
+        adaptive_delay=bool(getattr(args, "adaptive_rate_limit", True)),
     )
     crawled = saved = failed = 0
+    changed = unchanged = 0
     collected_documents = []
     collected_depths: list[int] = []
     saved_pages_meta: list[dict[str, Any]] = []
@@ -475,6 +707,11 @@ def run(args: argparse.Namespace) -> int:
 
         for page in crawler.crawl(urls):
             crawled += 1
+            if getattr(page, "unchanged", False):
+                unchanged += 1
+                logger.info("[depth %d] Unchanged (skipped) %s", page.depth, page.url)
+                continue
+            changed += 1
             try:
                 document = extract_structured(
                     page.html,
@@ -539,6 +776,8 @@ def run(args: argparse.Namespace) -> int:
 
             if not media_only:
                 filename = writer.save_document(document, page.depth)
+                if hasattr(crawler, "record_page_saved"):
+                    crawler.record_page_saved(page, filename)
                 saved += 1
                 try:
                     size_bytes = (output / filename).stat().st_size if filename else 0
@@ -591,13 +830,46 @@ def run(args: argparse.Namespace) -> int:
     if media_stats:
         media_info_str = f", media found={media_stats['total_media']}, media downloaded={media_stats['downloaded']}"
     summary_msg = (
-        f"\nSummary: pages crawled={crawled}, pages saved={saved}, pages failed={failed}, "
+        f"\nSummary: pages crawled={crawled}, pages saved={saved}, pages changed={changed}, "
+        f"pages unchanged={unchanged}, pages failed={failed}, "
         f"pages skipped={skipped}, files written={files_written}, format={args.format}{media_info_str}, elapsed={elapsed:.2f}s"
     )
+    if job_id and store is not None:
+        summary_msg += f"\nJob id: {job_id} (state: {state_path})"
+        summary_msg += "\nResume with: --resume " + job_id
     if is_piped:
         sys.stderr.write(summary_msg + "\n")
     else:
         print(summary_msg)
+
+    if store is not None:
+        try:
+            failures = store.failures(job_id)
+            queue_snapshot = store.queue_stats(job_id)
+            store.update_job(
+                job_id,
+                status="completed",
+                stats={
+                    "pages_crawled": crawled,
+                    "pages_saved": saved,
+                    "pages_changed": changed,
+                    "pages_unchanged": unchanged,
+                    "pages_failed": failed,
+                    "queue": queue_snapshot,
+                    "failures": len(failures),
+                },
+            )
+            if failures and getattr(args, "dlq", False):
+                logger.warning(
+                    "Dead-letter queue: %d URL(s). Retry with: --retry-failed %s",
+                    len(failures), job_id,
+                )
+        except Exception as exc:  # pragma: no cover
+            logger.debug("Could not finalize checkpoint: %s", exc)
+        finally:
+            store.close()
+    if delta is not None:
+        delta.close()
 
     if webhook_url:
         notify(

@@ -109,9 +109,16 @@ def _yaml_value(value: str) -> str:
 
 
 class OutputWriter:
-    def __init__(self, output_dir: str, output_format: str = "txt", media_only: bool = False) -> None:
+    def __init__(
+        self,
+        output_dir: str,
+        output_format: str = "txt",
+        media_only: bool = False,
+        incremental: bool = False,
+    ) -> None:
         self.output_format = (output_format or "txt").lower().strip()
         self.media_only = bool(media_only)
+        self.incremental = bool(incremental)
         if self.output_format not in OUTPUT_FORMATS:
             raise ValueError(
                 f"Unsupported output format '{output_format}'. Choose one of: {', '.join(OUTPUT_FORMATS)}"
@@ -120,6 +127,7 @@ class OutputWriter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.manifest: list[dict[str, object]] = []
         self._used_names: set[str] = set()
+        self._url_entries: dict[str, dict[str, object]] = {}
         self.files_written = 0
         self.written_files: set[str] = set()
         self._sqlite_connection: sqlite3.Connection | None = None
@@ -133,10 +141,19 @@ class OutputWriter:
                     for item in data:
                         if isinstance(item, dict) and "file" in item:
                             self._used_names.add(str(item["file"]))
+                            url = str(item.get("url") or "")
+                            if url:
+                                self._url_entries[url] = item
             except Exception:
                 pass
 
     def _filename(self, url: str) -> str:
+        if self.incremental:
+            existing = self._url_entries.get(url)
+            if existing and existing.get("file"):
+                filename = str(existing["file"])
+                self._used_names.add(filename)
+                return filename
         stem = _safe_stem(url)
         suffix = _SUFFIXES[self.output_format]
         candidate = f"{stem}{suffix}"
@@ -266,7 +283,19 @@ class OutputWriter:
             entry["description"] = document.description
         if document.word_count:
             entry["word_count"] = document.word_count
-        self.manifest.append(entry)
+        if self.incremental:
+            existing = self._url_entries.get(document.url)
+            if existing is not None:
+                try:
+                    index = self.manifest.index(existing)
+                    self.manifest[index] = entry
+                except ValueError:
+                    self.manifest.append(entry)
+            else:
+                self.manifest.append(entry)
+            self._url_entries[document.url] = entry
+        else:
+            self.manifest.append(entry)
         self._flush_manifest()
         return filename
 

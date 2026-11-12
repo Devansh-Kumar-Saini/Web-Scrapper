@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ try:
     from .media import MEDIA_CATEGORIES, MediaCollector, MediaItem, extract_media_from_html, parse_media_types
     from .scraper import scrape_url
     from .sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from .state import CrawlStore, DeltaCache, default_state_path
     from .webhook import build_payload, deliver_webhook, validate_webhook_url
     from .writer import OUTPUT_FORMATS, OutputWriter
 except ImportError:
@@ -45,6 +47,7 @@ except ImportError:
     from media import MEDIA_CATEGORIES, MediaCollector, MediaItem, extract_media_from_html, parse_media_types
     from scraper import scrape_url
     from sitemap import discover_sitemap_urls, fetch_sitemap_urls
+    from state import CrawlStore, DeltaCache, default_state_path
     from webhook import build_payload, deliver_webhook, validate_webhook_url
     from writer import OUTPUT_FORMATS, OutputWriter
 
@@ -224,6 +227,19 @@ class JobState:
     media_mode: str = "both"
     download_media: bool = False
     media_types: list[str] = field(default_factory=lambda: list(MEDIA_CATEGORIES))
+    # Phase 6: local resilience, checkpointing, delta crawling, and DLQ.
+    job_id: str = ""
+    resume_of: str = ""
+    incremental: bool = False
+    max_retries: int = 2
+    adaptive_rate_limit: bool = True
+    checkpoint: bool = True
+    dlq: bool = False
+    delta_skipped: int = 0
+    failures: list[dict[str, Any]] = field(default_factory=list)
+    queue_stats: dict[str, Any] = field(default_factory=dict)
+    circuit_breakers: dict[str, Any] = field(default_factory=dict)
+    state_db: str = ""
     media_extracted: int = 0
     media_downloaded: int = 0
     recent_media: list[dict[str, Any]] = field(default_factory=list)
@@ -428,6 +444,60 @@ class JobManager:
 
         return targets
 
+    # --- Phase 6: local state helpers --------------------------------------
+
+    @staticmethod
+    def state_path_for(output_dir: str) -> str:
+        return str(default_state_path(_resolve_output_dir(output_dir)))
+
+    def _job_config(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Serializable crawl settings stored with a checkpointed job."""
+        keys = (
+            "urls", "depth", "max_pages", "same_domain", "output_dir", "output_format",
+            "include_patterns", "exclude_patterns", "target_selector", "exclude_selectors",
+            "schema", "chunk_size", "chunk_overlap", "respect_robots", "concurrency",
+            "delay", "sitemap", "sitemap_url", "impersonate", "proxy", "render_js",
+            "dry_run", "webhook_url", "extract_media", "media_mode", "download_media",
+            "media_types", "incremental", "max_retries", "adaptive_rate_limit",
+            "checkpoint", "dlq",
+        )
+        return {key: snapshot.get(key) for key in keys}
+
+    def list_jobs(self, output_dir: str = "./output", limit: int = 50) -> list[dict[str, Any]]:
+        store = CrawlStore(self.state_path_for(output_dir))
+        try:
+            return store.list_jobs(limit=limit)
+        finally:
+            store.close()
+
+    def get_job_details(
+        self, job_id: str, output_dir: str = "./output"
+    ) -> dict[str, Any] | None:
+        store = CrawlStore(self.state_path_for(output_dir))
+        try:
+            job = store.get_job(job_id)
+            if job is None:
+                return None
+            job["failures"] = store.failures(job_id)
+            job["queue"] = store.queue_stats(job_id)
+            return job
+        finally:
+            store.close()
+
+    def failures(self, job_id: str = "", output_dir: str = "./output") -> list[dict[str, Any]]:
+        """Return DLQ entries for a job, or for the active job when omitted."""
+        if not job_id:
+            with self.lock:
+                job_id = self.state.job_id
+                if not job_id:
+                    return list(self.state.failures)
+                output_dir = self.state.output_dir or output_dir
+        store = CrawlStore(self.state_path_for(output_dir))
+        try:
+            return store.failures(job_id)
+        finally:
+            store.close()
+
     def start_crawl(
         self,
         urls: list[str],
@@ -457,10 +527,45 @@ class JobManager:
         media_mode: str = "both",
         download_media: bool = False,
         media_types: list[str] | None = None,
+        incremental: bool = False,
+        resume_job_id: str = "",
+        max_retries: int = 2,
+        adaptive_rate_limit: bool = True,
+        checkpoint: bool = True,
+        requeue_failed: bool = False,
+        dlq: bool = False,
     ) -> tuple[bool, str]:
         with self.lock:
             if self.state.status in {"running", "stopping"}:
                 return False, "A crawling job is already running."
+
+            job_id = (resume_job_id or "").strip() or uuid.uuid4().hex[:12]
+            state_db = self.state_path_for(output_dir)
+            store: CrawlStore | None = None
+            stored_config: dict[str, Any] = {}
+            try:
+                if checkpoint or incremental or resume_job_id:
+                    store = CrawlStore(state_db)
+                    existing = store.get_job(job_id)
+                    if resume_job_id and existing is None:
+                        return False, f"Checkpointed job '{job_id}' was not found in {state_db}."
+                    if existing is not None:
+                        stored_config = dict(existing.get("config") or {})
+                        urls = urls or list(stored_config.get("urls") or [])
+                    if existing is None:
+                        store.create_job(
+                            job_id,
+                            output_dir=_resolve_output_dir(output_dir).as_posix(),
+                            config={},
+                            status="running",
+                        )
+                    else:
+                        store.update_job(job_id, status="running")
+                    if requeue_failed:
+                        store.requeue_failed(job_id)
+            finally:
+                if store is not None:
+                    store.close()
 
             self.stop_event.clear()
             self.state = JobState(
@@ -492,9 +597,29 @@ class JobManager:
                 media_mode=media_mode,
                 download_media=download_media,
                 media_types=media_types or list(MEDIA_CATEGORIES),
+                job_id=job_id if (checkpoint or incremental or resume_job_id) else "",
+                resume_of=resume_job_id,
+                incremental=incremental,
+                max_retries=max_retries,
+                adaptive_rate_limit=adaptive_rate_limit,
+                checkpoint=checkpoint,
+                dlq=dlq,
+                state_db=state_db,
                 started_at=time.monotonic(),
                 started_at_iso=datetime.now(timezone.utc).isoformat(),
             )
+
+            if self.state.job_id:
+                store = CrawlStore(state_db)
+                try:
+                    store.update_job(
+                        job_id,
+                        status="running",
+                        config=self._job_config(self.get_snapshot()),
+                        output_dir=_resolve_output_dir(output_dir).as_posix(),
+                    )
+                finally:
+                    store.close()
 
         self.worker_thread = threading.Thread(
             target=self._run_crawler_worker,
@@ -526,6 +651,13 @@ class JobManager:
                 media_mode,
                 download_media,
                 media_types,
+                self.state.job_id,
+                incremental,
+                max_retries,
+                adaptive_rate_limit,
+                checkpoint,
+                bool(resume_job_id),
+                bool(dlq),
             ),
             daemon=True,
         )
@@ -543,6 +675,90 @@ class JobManager:
         self.log("WARN", "Stopping crawler on user request...")
         self.broadcast("status", self.get_snapshot())
         return True, "Stop signal sent."
+
+    def resume_job(
+        self,
+        job_id: str,
+        output_dir: str = "./output",
+        *,
+        requeue_failed: bool = False,
+    ) -> tuple[bool, str]:
+        """Resume a checkpointed job using its saved configuration."""
+        store = CrawlStore(self.state_path_for(output_dir))
+        try:
+            job = store.get_job(job_id)
+            failures = store.failures(job_id) if job is not None else []
+        finally:
+            store.close()
+
+        if job is None and self.state.output_dir and self.state.output_dir != output_dir:
+            fallback_store = CrawlStore(self.state_path_for(self.state.output_dir))
+            try:
+                fallback_job = fallback_store.get_job(job_id)
+                if fallback_job is not None:
+                    job = fallback_job
+                    output_dir = self.state.output_dir
+                    failures = fallback_store.failures(job_id)
+            finally:
+                fallback_store.close()
+
+        if job is None:
+            return False, f"Job '{job_id}' was not found in {self.state_path_for(output_dir)}."
+        cfg = dict(job.get("config") or {})
+
+        if requeue_failed and not failures:
+            return False, "This job has no failed URLs to retry."
+        with self.lock:
+            if self.state.status in {"running", "stopping"}:
+                return False, "A crawling job is already running."
+
+        saved_output = cfg.get("output_dir") or job.get("output_dir") or output_dir
+        return self.start_crawl(
+            urls=list(cfg.get("urls") or []),
+            depth=int(cfg.get("depth", 1) or 0),
+            max_pages=int(cfg.get("max_pages", DEFAULT_MAX_PAGES) or DEFAULT_MAX_PAGES),
+            same_domain=bool(cfg.get("same_domain", True)),
+            output_dir=str(saved_output),
+            include_patterns=cfg.get("include_patterns") or [],
+            exclude_patterns=cfg.get("exclude_patterns") or [],
+            target_selector=str(cfg.get("target_selector") or ""),
+            exclude_selectors=cfg.get("exclude_selectors") or [],
+            output_format=str(cfg.get("output_format") or "txt"),
+            chunk_size=int(cfg.get("chunk_size", 0) or 0),
+            chunk_overlap=int(cfg.get("chunk_overlap", 400) or 400),
+            respect_robots=bool(cfg.get("respect_robots", True)),
+            concurrency=int(cfg.get("concurrency", 5) or 5),
+            delay=float(cfg.get("delay", REQUEST_DELAY_SECONDS) or 0.0),
+            sitemap=bool(cfg.get("sitemap", False)),
+            sitemap_url=str(cfg.get("sitemap_url") or ""),
+            impersonate=cfg.get("impersonate", "chrome"),
+            proxy=cfg.get("proxy") or None,
+            render_js=bool(cfg.get("render_js", False)),
+            dry_run=bool(cfg.get("dry_run", False)),
+            webhook_url=str(cfg.get("webhook_url") or ""),
+            schema=cfg.get("schema") or {},
+            extract_media=bool(cfg.get("extract_media", False)),
+            media_mode=str(cfg.get("media_mode") or "both"),
+            download_media=bool(cfg.get("download_media", False)),
+            media_types=cfg.get("media_types"),
+            incremental=bool(cfg.get("incremental", False)),
+            resume_job_id=job_id,
+            max_retries=int(cfg.get("max_retries", 2) or 2),
+            adaptive_rate_limit=bool(cfg.get("adaptive_rate_limit", True)),
+            checkpoint=bool(cfg.get("checkpoint", True)),
+            requeue_failed=requeue_failed,
+            dlq=bool(cfg.get("dlq", False)),
+        )
+
+    def retry_failed(self, job_id: str = "", output_dir: str = "./output") -> tuple[bool, str]:
+        """Requeue only DLQ URLs and resume the job from that point."""
+        if not job_id:
+            with self.lock:
+                job_id = self.state.job_id
+                output_dir = self.state.output_dir or output_dir
+        if not job_id:
+            return False, "No job id supplied and no active checkpointed job exists."
+        return self.resume_job(job_id, output_dir=output_dir, requeue_failed=True)
 
     def _run_crawler_worker(
         self,
@@ -573,9 +789,32 @@ class JobManager:
         media_mode: str = "both",
         download_media: bool = False,
         media_types: list[str] | None = None,
+        job_id: str = "",
+        incremental: bool = False,
+        max_retries: int = 2,
+        adaptive_rate_limit: bool = True,
+        checkpoint: bool = True,
+        resume: bool = False,
+        dlq: bool = False,
     ) -> None:
         out_path = _resolve_output_dir(output_dir_str)
         out_path.mkdir(parents=True, exist_ok=True)
+        state_db = self.state_path_for(output_dir_str)
+        store: CrawlStore | None = None
+        delta: DeltaCache | None = None
+        if job_id and (checkpoint or incremental or resume):
+            try:
+                store = CrawlStore(state_db)
+                if store.get_job(job_id) is None:
+                    store.create_job(job_id, output_dir=str(out_path), status="running")
+                else:
+                    store.update_job(job_id, status="running")
+                if incremental:
+                    delta = DeltaCache(state_db)
+            except Exception as exc:  # pragma: no cover - state is best effort
+                self.log("WARN", f"Could not initialize crawl checkpoint: {exc}")
+                store = None
+                delta = None
 
         log_path = out_path / "scrape_log.txt"
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -658,7 +897,20 @@ class JobManager:
                 media_types=media_types,
             )
 
-        writer = OutputWriter(str(out_path), output_format=output_format, media_only=media_only)
+        writer = OutputWriter(
+            str(out_path),
+            output_format=output_format,
+            media_only=media_only,
+            incremental=incremental,
+        )
+
+        def _on_failure(entry: dict[str, Any]) -> None:
+            self.log(
+                "WARN",
+                f"Moved to DLQ [{entry.get('error_category')}] {entry.get('url')}: {entry.get('message')}",
+            )
+            self.broadcast("dlq", entry)
+
         crawler = Crawler(
             max_depth=depth,
             max_pages=max_pages,
@@ -676,6 +928,25 @@ class JobManager:
             proxy=proxy,
             render_js=render_js,
             page_processor=_extract_page if not dry_run else None,
+            store=store,
+            delta=delta,
+            job_id=job_id or None,
+            resume=resume,
+            max_retries=max_retries,
+            adaptive_delay=adaptive_rate_limit,
+            on_failure=_on_failure if dlq else None,
+        )
+
+        if store is not None:
+            self.log(
+                "INFO",
+                f"Checkpointing enabled: job {job_id}, state DB {state_db}",
+            )
+        if delta is not None:
+            self.log("INFO", "Incremental mode: conditional requests + SHA-256 change detection enabled.")
+        self.log(
+            "INFO",
+            f"Resilience: max_retries={max_retries}, adaptive_rate_limit={adaptive_rate_limit}",
         )
 
         try:
@@ -750,6 +1021,19 @@ class JobManager:
                         self.state.current_url = page.url
                         self.state.current_depth = page.depth
                         self.state.pages_crawled += 1
+                        if store is not None and job_id:
+                            try:
+                                self.state.queue_stats = store.queue_stats(job_id)
+                            except Exception:
+                                pass
+
+                    if getattr(page, "unchanged", False):
+                        with self.lock:
+                            self.state.pages_skipped += 1
+                            self.state.delta_skipped += 1
+                        self.log("INFO", f"[depth {page.depth}] Unchanged (skipped) {page.url}")
+                        self.broadcast("stats", self.get_stats())
+                        continue
 
                     document = getattr(page, "extracted_document", None)
                     if document is None:
@@ -823,6 +1107,8 @@ class JobManager:
                         filename = writer.save_document(document, page.depth)
                         title = document.title
                         file_size = (out_path / filename).stat().st_size if filename else 0
+                        if hasattr(crawler, "record_page_saved"):
+                            crawler.record_page_saved(page, filename)
 
                         page_info = {
                             "file": filename,
@@ -851,11 +1137,33 @@ class JobManager:
 
             stopped = self.stop_event.is_set()
             saved_count = 0
+            failure_rows: list[dict[str, Any]] = []
+            queue_snapshot: dict[str, Any] = {}
+            if store is not None and job_id:
+                try:
+                    failure_rows = store.failures(job_id)
+                    queue_snapshot = store.queue_stats(job_id)
+                    store.update_job(
+                        job_id,
+                        status="stopped" if stopped else "completed",
+                        stats={
+                            "pages_crawled": self.state.pages_crawled,
+                            "pages_saved": self.state.pages_saved,
+                            "pages_skipped": self.state.pages_skipped,
+                            "delta_skipped": self.state.delta_skipped,
+                            "queue": queue_snapshot,
+                            "failures": len(failure_rows),
+                        },
+                    )
+                except Exception as state_exc:  # pragma: no cover
+                    self.log("WARN", f"Could not finalize crawl checkpoint: {state_exc}")
             with self.lock:
                 self.state.pages_skipped = len(crawler.skipped_reasons)
                 self.state.finished_at = time.monotonic()
                 self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
                 self.state.status = "stopped" if stopped else "completed"
+                self.state.failures = failure_rows
+                self.state.queue_stats = queue_snapshot
                 saved_count = self.state.pages_saved
 
             if stopped:
@@ -864,8 +1172,18 @@ class JobManager:
                     f"Crawl stopped by user. Progress saved: {saved_count} page(s), "
                     f"{len(media_collector.items) if media_collector else 0} media asset(s).",
                 )
+                if store is not None:
+                    self.log(
+                        "INFO",
+                        f"Resume later with job id '{job_id}' (CLI: --resume {job_id}).",
+                    )
             else:
                 self.log("INFO", f"Crawl completed successfully! Saved {saved_count} pages.")
+            if failure_rows:
+                self.log(
+                    "WARN",
+                    f"Dead-letter queue contains {len(failure_rows)} URL(s). Retry them from the UI or CLI.",
+                )
             self._notify_webhook(
                 "crawl.stopped" if stopped else "crawl.completed",
                 "stopped" if stopped else "completed",
@@ -877,12 +1195,27 @@ class JobManager:
                 self.state.finished_at = time.monotonic()
                 self.state.finished_at_iso = datetime.now(timezone.utc).isoformat()
                 self.state.error_message = str(exc)
+            if store is not None and job_id:
+                try:
+                    store.update_job(job_id, status="failed", stats={"error": str(exc)})
+                except Exception:
+                    pass
             self.log("ERROR", f"Fatal error during crawl: {exc}")
             self._notify_webhook("crawl.failed", "failed", error=str(exc))
         finally:
             logger.removeHandler(file_handler)
             logger.removeHandler(ui_handler)
             file_handler.close()
+            try:
+                if store is not None and job_id:
+                    self.state.failures = store.failures(job_id)
+                    self.state.queue_stats = store.queue_stats(job_id)
+            except Exception:
+                pass
+            if store is not None:
+                store.close()
+            if delta is not None:
+                delta.close()
             stopped = self.stop_event.is_set()
             with self.lock:
                 self.state.current_url = ""
@@ -1089,7 +1422,8 @@ def api_scrape_start() -> Any:
 
     valid_urls, invalid_urls = _parse_urls(raw_urls)
     raw_sitemap_url = str(data.get("sitemap_url") or "").strip()
-    if not valid_urls and not raw_sitemap_url:
+    requested_resume = str(data.get("resume_job_id") or "").strip()
+    if not valid_urls and not raw_sitemap_url and not requested_resume:
         return jsonify({"error": "No valid HTTP/HTTPS URLs provided.", "invalid": invalid_urls}), 400
 
     try:
@@ -1163,6 +1497,16 @@ def api_scrape_start() -> Any:
     download_media = _as_bool(data.get("download_media"), False)
     media_types = data.get("media_types")
 
+    # Phase 6: local scalability / resilience options.
+    incremental = _as_bool(data.get("incremental"), False)
+    resume_job_id = str(data.get("resume_job_id") or "").strip()
+    max_retries = max(0, min(10, _as_int(data.get("max_retries", 2), 2)))
+    adaptive_rate_limit = _as_bool(data.get("adaptive_rate_limit"), True)
+    checkpoint = _as_bool(data.get("checkpoint"), True)
+    dlq = _as_bool(data.get("dlq"), False)
+    if resume_job_id and not _as_bool(data.get("checkpoint"), True):
+        checkpoint = True
+
     started, msg = job_manager.start_crawl(
         urls=valid_urls,
         depth=depth,
@@ -1191,6 +1535,12 @@ def api_scrape_start() -> Any:
         media_mode=media_mode,
         download_media=download_media,
         media_types=media_types,
+        incremental=incremental,
+        resume_job_id=resume_job_id,
+        max_retries=max_retries,
+        adaptive_rate_limit=adaptive_rate_limit,
+        checkpoint=checkpoint,
+        dlq=dlq,
     )
 
     if not started:
@@ -1199,6 +1549,7 @@ def api_scrape_start() -> Any:
     return jsonify({
         "status": "started",
         "message": msg,
+        "job_id": job_manager.get_snapshot().get("job_id", ""),
         "valid_urls": valid_urls,
         "invalid_urls": invalid_urls,
         "config": {
@@ -1228,6 +1579,11 @@ def api_scrape_start() -> Any:
             "media_mode": media_mode,
             "download_media": download_media,
             "media_types": media_types,
+            "incremental": incremental,
+            "resume_job_id": resume_job_id,
+            "max_retries": max_retries,
+            "adaptive_rate_limit": adaptive_rate_limit,
+            "checkpoint": checkpoint,
         },
     })
 
@@ -1243,6 +1599,116 @@ def api_scrape_stop() -> Any:
 @app.route("/api/scrape/status", methods=["GET"])
 def api_scrape_status() -> Any:
     return jsonify(job_manager.get_snapshot())
+
+
+# --- Phase 6: checkpoints, durable queue, delta cache, and DLQ ------------
+
+@app.route("/api/jobs", methods=["GET"])
+def api_jobs() -> Any:
+    """List checkpointed crawl jobs stored in the local SQLite state DB."""
+    output_dir = request.args.get("output_dir", "./output")
+    limit = max(1, min(200, _as_int(request.args.get("limit", 50), 50)))
+    try:
+        jobs = job_manager.list_jobs(output_dir=output_dir, limit=limit)
+    except Exception as exc:
+        return jsonify({"error": f"Could not read crawl state: {exc}"}), 500
+    return jsonify({
+        "output_dir": str(_resolve_output_dir(output_dir)),
+        "state_db": job_manager.state_path_for(output_dir),
+        "jobs": jobs,
+    })
+
+
+@app.route("/api/jobs/<job_id>", methods=["GET"])
+def api_job_detail(job_id: str) -> Any:
+    output_dir = request.args.get("output_dir", "./output")
+    try:
+        job = job_manager.get_job_details(job_id, output_dir=output_dir)
+    except Exception as exc:
+        return jsonify({"error": f"Could not read crawl state: {exc}"}), 500
+    if job is None:
+        return jsonify({"error": f"Job '{job_id}' was not found."}), 404
+    return jsonify(job)
+
+
+@app.route("/api/jobs/<job_id>/resume", methods=["POST"])
+def api_job_resume(job_id: str) -> Any:
+    data = request.get_json(silent=True) or {}
+    output_dir = str(data.get("output_dir") or request.args.get("output_dir", "./output"))
+    started, msg = job_manager.resume_job(job_id, output_dir=output_dir)
+    if not started:
+        status = 409 if "already running" in msg.lower() else 404 if "not found" in msg.lower() else 400
+        return jsonify({"error": msg}), status
+    return jsonify({
+        "status": "started",
+        "message": msg,
+        "job_id": job_id,
+        "snapshot": job_manager.get_snapshot(),
+    })
+
+
+@app.route("/api/scrape/failures", methods=["GET"])
+def api_scrape_failures() -> Any:
+    """Return the dead-letter queue (failed URLs grouped by error category)."""
+    job_id = str(request.args.get("job_id") or "").strip()
+    output_dir = request.args.get("output_dir", "./output")
+    try:
+        failures = job_manager.failures(job_id=job_id, output_dir=output_dir)
+    except Exception as exc:
+        return jsonify({"error": f"Could not read failure queue: {exc}"}), 500
+    snapshot = job_manager.get_snapshot()
+    return jsonify({
+        "job_id": job_id or snapshot.get("job_id", ""),
+        "output_dir": str(_resolve_output_dir(output_dir)),
+        "total_failures": len(failures),
+        "failures": failures,
+    })
+
+
+@app.route("/api/scrape/retry-failed", methods=["POST"])
+def api_scrape_retry_failed() -> Any:
+    """Requeue only DLQ URLs and resume the same checkpointed job."""
+    data = request.get_json(silent=True) or {}
+    job_id = str(data.get("job_id") or "").strip()
+    output_dir = str(data.get("output_dir") or "./output")
+    started, msg = job_manager.retry_failed(job_id, output_dir=output_dir)
+    if not started:
+        return jsonify({"error": msg}), 400
+    return jsonify({
+        "status": "started",
+        "message": msg,
+        "job_id": job_id or job_manager.get_snapshot().get("job_id", ""),
+    })
+
+
+@app.route("/api/scrape/delta-stats", methods=["GET"])
+def api_delta_stats() -> Any:
+    """Report how many URLs the local incremental cache knows about."""
+    output_dir = request.args.get("output_dir", "./output")
+    db_path = job_manager.state_path_for(output_dir)
+    delta = DeltaCache(db_path) if Path(db_path).exists() else None
+    try:
+        stats = delta.stats() if delta is not None else {"cached_urls": 0, "last_fetch": None}
+    except Exception:
+        stats = {"cached_urls": 0, "last_fetch": None}
+    finally:
+        if delta is not None:
+            delta.close()
+    return jsonify({"output_dir": str(_resolve_output_dir(output_dir)), "state_db": db_path, **stats})
+
+
+@app.route("/api/scrape/resume", methods=["POST"])
+def api_scrape_resume() -> Any:
+    """Resume a stopped/failed job by id (alias for the /api/jobs route)."""
+    data = request.get_json(silent=True) or {}
+    job_id = str(data.get("job_id") or "").strip()
+    output_dir = str(data.get("output_dir") or "./output")
+    if not job_id:
+        return jsonify({"error": "job_id is required."}), 400
+    started, msg = job_manager.resume_job(job_id, output_dir=output_dir)
+    if not started:
+        return jsonify({"error": msg}), 400
+    return jsonify({"status": "started", "message": msg, "job_id": job_id})
 
 
 @app.route("/api/scrape/reset", methods=["POST"])

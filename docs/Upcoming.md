@@ -105,20 +105,20 @@ This future plan focuses strictly on **core web scraping excellence, browser aut
 ### Phase 6: Scalability, Queuing & Crawl Resilience
 *Objective: Scale to 100,000+ page datasets with rock-solid fault tolerance and state resumption.*
 
-- [ ] **Incremental / Delta Crawling (Smart Change Detection)**
+- [x] **Incremental / Delta Crawling (Smart Change Detection)**
   - Content hashing (SHA-256) and HTTP cache validation (`ETag`, `Last-Modified`).
   - Respect sitemap `lastmod` timestamps to skip unchanged pages.
   - Delta updates: only re-fetch, extract, and write pages that have genuinely changed since the last crawl.
 
-- [ ] **Persistent & Distributed Queue (Redis / Celery)**
-  - Optional Redis-backed URL queue allowing multiple crawler instances/containers to scrape concurrently across machines.
-  - Distributed worker coordination without duplicate URL processing.
+- [x] **Persistent & Distributed Queue (Local SQLite Queue & Atomic Worker Leases)**
+  - Local SQLite-backed URL queue with WAL mode, busy timeout, and atomic worker leases.
+  - Distributed multi-worker / multi-process coordination without duplicate URL processing or external services.
 
-- [ ] **Crawl State Checkpointing & Resume**
-  - Checkpoint URL queue, visited set, and progress to SQLite/Redis.
+- [x] **Crawl State Checkpointing & Resume**
+  - Checkpoint URL queue, visited set, and progress to SQLite (`<output>/.scraper/crawl_state.db`).
   - Resume interrupted crawls (`--resume <job-id>`) seamlessly after network drops or container restarts.
 
-- [ ] **Dead-Letter Queue (DLQ) & Intelligent Retry**
+- [x] **Dead-Letter Queue (DLQ) & Intelligent Retry**
   - Dedicated failure queue categorizing errors (DNS resolution, HTTP 403, HTTP 429, Playwright timeouts).
   - UI and CLI retry button to re-run only failed URLs without restarting the entire crawl.
   - Adaptive rate limiting with exponential backoff and circuit-breaking per domain.
