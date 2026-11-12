@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from Backend.app import JobManager, JobState, app
-from Backend.cli import parse_args, run
 from Backend.crawler import Crawler, Page
 from Backend.fetcher import FetchError, FetchResult, Fetcher, NonHtmlContent, RobotsDisallowed
 from Backend.retry import (
@@ -619,45 +618,6 @@ class TestApiPhase6Endpoints(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 200)
             self.assertFalse(mock_start_off.call_args[1].get("dlq"))
-
-
-class TestCliPhase6Options(unittest.TestCase):
-    def test_cli_parser_phase6_flags(self):
-        args = parse_args([
-            "--url", "https://example.com",
-            "--incremental",
-            "--checkpoint",
-            "--max-retries", "3",
-            "--adaptive-rate-limit",
-            "--dlq",
-            "--resume", "job-1234",
-        ])
-        self.assertTrue(args.incremental)
-        self.assertTrue(args.checkpoint)
-        self.assertEqual(args.max_retries, 3)
-        self.assertTrue(args.adaptive_rate_limit)
-        self.assertTrue(args.dlq)
-        self.assertEqual(args.resume, "job-1234")
-
-    def test_cli_list_failures(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            out_dir = Path(tmp_dir)
-            db_path = out_dir / ".scraper" / "crawl_state.db"
-            store = CrawlStore(db_path)
-            store.create_job("job-list", output_dir=str(out_dir))
-            store.enqueue("job-list", "https://example.com/fail")
-            store.claim("job-list")
-            store.fail("job-list", "https://example.com/fail", category=CATEGORY_HTTP_5XX, retryable=False, message="500 Internal Error")
-            store.close()
-
-            args = parse_args([
-                "--list-failures", "job-list",
-                "--output-dir", str(out_dir),
-                "--json",
-            ])
-            with patch("sys.stdout") as mock_stdout:
-                ret = run(args)
-                self.assertEqual(ret, 0)
 
 
 if __name__ == "__main__":

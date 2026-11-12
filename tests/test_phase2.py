@@ -10,7 +10,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from Backend.app import app
-from Backend.cli import parse_args, run
 from Backend.crawler import Crawler, Page
 from Backend.fetcher import Fetcher, FetchResult
 from Backend.sitemap import discover_sitemap_urls, fetch_sitemap_urls, parse_sitemap_xml
@@ -312,82 +311,6 @@ class TestConcurrentCrawler(unittest.TestCase):
         self.assertIsNotNone(pages[0].extracted_document)
         self.assertEqual(pages[0].extracted_document["processed_url"], "https://example.com/test")
         self.assertTrue(pages[0].extracted_document["has_content"])
-
-
-class TestCLIPipeAndDryRun(unittest.TestCase):
-    @patch("Backend.cli.Crawler")
-    def test_cli_dry_run_stdout(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_inst.url_filter.excluded_by.return_value = None
-        mock_crawler_cls.return_value = mock_inst
-
-        captured_stdout = io.StringIO()
-        with patch("sys.stdout", captured_stdout):
-            ret = run(parse_args(["--url", "https://example.com/dry", "--dry-run"]))
-            self.assertEqual(ret, 0)
-        output = captured_stdout.getvalue()
-        self.assertIn("Dry run:", output)
-        self.assertIn("https://example.com/dry", output)
-
-    @patch("Backend.cli.Crawler")
-    def test_cli_dry_run_json(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_inst.url_filter.excluded_by.return_value = None
-        mock_crawler_cls.return_value = mock_inst
-
-        captured_stdout = io.StringIO()
-        with patch("sys.stdout", captured_stdout):
-            ret = run(parse_args(["--url", "https://example.com/dry", "--dry-run", "--json"]))
-            self.assertEqual(ret, 0)
-        output = captured_stdout.getvalue()
-        data = json.loads(output)
-        self.assertTrue(data.get("dry_run"))
-        self.assertIn("https://example.com/dry", data.get("target_urls"))
-
-    @patch("Backend.cli.Crawler")
-    def test_cli_stdout_markdown_pipe(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_page = Page("https://example.com/p1", 0, "Test Title", "<html><body><h1>Hello World</h1><p>Test</p></body></html>")
-        mock_inst.crawl.return_value = [mock_page]
-        mock_inst.skipped_reasons = []
-        mock_crawler_cls.return_value = mock_inst
-
-        captured_stdout = io.StringIO()
-        with patch("sys.stdout", captured_stdout):
-            ret = run(parse_args(["--url", "https://example.com/p1", "--stdout", "--format", "md"]))
-            self.assertEqual(ret, 0)
-        output = captured_stdout.getvalue()
-        self.assertIn("# Hello World", output)
-
-    @patch("Backend.cli.Crawler")
-    def test_cli_json_pipe(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_page = Page("https://example.com/p1", 0, "Test Title", "<html><head><title>Test Title</title></head><body><h1>Hello JSON</h1><p>Words words words words words</p></body></html>")
-        mock_inst.crawl.return_value = [mock_page]
-        mock_inst.skipped_reasons = []
-        mock_crawler_cls.return_value = mock_inst
-
-        captured_stdout = io.StringIO()
-        with patch("sys.stdout", captured_stdout):
-            ret = run(parse_args(["--url", "https://example.com/p1", "--json"]))
-            self.assertEqual(ret, 0)
-        data = json.loads(captured_stdout.getvalue())
-        self.assertEqual(data["url"], "https://example.com/p1")
-        self.assertEqual(data["title"], "Test Title")
-
-    def test_cli_config_file_loading(self):
-        with tempfile.NamedTemporaryFile("w+", suffix=".json") as f:
-            f.write(json.dumps({"depth": 3, "format": "jsonl", "concurrency": 8, "delay": 0.05}))
-            f.flush()
-            args = parse_args(["--config", f.name, "--url", "https://example.com"])
-            self.assertEqual(args.depth, 3)
-            self.assertEqual(args.format, "jsonl")
-            self.assertEqual(args.concurrency, 8)
-            self.assertEqual(args.delay, 0.05)
-
-    def test_cli_delay_argument(self):
-        args = parse_args(["--url", "https://example.com", "--delay", "0.5"])
-        self.assertEqual(args.delay, 0.5)
 
 
 class TestAppPhase2Endpoints(unittest.TestCase):

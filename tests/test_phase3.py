@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from Backend.app import JobManager, JobState, app
-from Backend.cli import parse_args, run
 from Backend.exporter import build_results_zip, normalize_format, parse_saved_pages
 from Backend.extractor import PageContent
 from Backend.webhook import build_payload, deliver_webhook, validate_webhook_url
@@ -197,22 +196,6 @@ class TestParityOptions(unittest.TestCase):
         )
         self.assertTrue(any("admin" in reason for reason in crawler.skipped_reasons))
 
-    def test_cli_parse_render_js_flag(self):
-        args = parse_args(["--url", "https://example.com", "--render-js"])
-        self.assertTrue(args.render_js)
-
-    @patch("Backend.cli.Crawler")
-    def test_cli_run_passes_render_js_to_crawler(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_inst.url_filter.excluded_by.return_value = None
-        mock_crawler_cls.return_value = mock_inst
-
-        with patch("sys.stdout", io.StringIO()):
-            ret = run(parse_args(["--url", "https://example.com/dry", "--dry-run", "--render-js"]))
-
-        self.assertEqual(ret, 0)
-        self.assertTrue(mock_crawler_cls.call_args.kwargs["render_js"])
-
     @patch("Backend.app.Crawler")
     def test_dry_run_crawls_and_discovers_links_without_saving(self, mock_crawler_cls):
         mock_inst = MagicMock()
@@ -245,24 +228,6 @@ class TestParityOptions(unittest.TestCase):
             # Verify no page body files or index.json were written to the output dir
             saved_pages = [f for f in Path(temp_dir).glob("*") if f.name != "scrape_log.txt"]
             self.assertEqual(len(saved_pages), 0)
-
-    @patch("Backend.cli.Crawler")
-    def test_cli_dry_run_crawls_multiple_pages(self, mock_crawler_cls):
-        mock_inst = MagicMock()
-        mock_inst.skipped_reasons = []
-        mock_inst.crawl.return_value = [
-            MagicMock(url="https://example.com", depth=0),
-            MagicMock(url="https://example.com/sub", depth=1),
-        ]
-        mock_crawler_cls.return_value = mock_inst
-
-        captured_stdout = io.StringIO()
-        with patch("sys.stdout", captured_stdout):
-            ret = run(parse_args(["--url", "https://example.com", "--dry-run", "--json"]))
-            self.assertEqual(ret, 0)
-        data = json.loads(captured_stdout.getvalue())
-        self.assertEqual(data["total"], 2)
-        self.assertEqual(data["target_urls"], ["https://example.com", "https://example.com/sub"])
 
     def test_subscriber_queue_resilience_and_completion_broadcast(self):
         manager = JobManager()

@@ -46,7 +46,7 @@ dev = [
 ]
 
 [project.scripts]
-website-scraper = "Backend.cli:main"
+website-scraper = "main:main"
 
 [project.urls]
 Homepage = "https://github.com/Devansh-Kumar-Saini/Web-Scrapper"

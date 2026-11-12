@@ -1,6 +1,6 @@
 # Website Content Scraper
 
-A free, self-hosted, developer-first web scraper and crawler. It follows links to a configurable depth and saves clean **text, Markdown, JSON, or JSONL** locally — no accounts, no hosted scraping APIs, no per-request fees. It includes both a command-line interface (CLI) and a minimalist web UI.
+A free, self-hosted, developer-first web scraper and crawler. It follows links to a configurable depth and saves clean **text, Markdown, JSON, or JSONL** locally — no accounts, no hosted scraping APIs, no per-request fees. It features a modern, responsive web UI dashboard with live telemetry and a full REST/SSE API.
 
 Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a dataset, archiving a site, or testing selectors and URL filters against a real page.
 
@@ -9,6 +9,7 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 
 ## Features
 
+- **Modern Web UI Dashboard**: Single-page application interface for configuring crawls, inspecting pages live, and browsing output files.
 - **RAG-ready Markdown** with headings, lists, links, tables, images, and code blocks preserved.
 - **Structured JSON / JSONL** with title, description, author, publish date, canonical URL, links, images, headings, and optional chunks.
 - **CSV and SQLite output** (`pages.csv`, `pages.db`) for spreadsheets, pandas, and SQL analysis.
@@ -25,7 +26,9 @@ Typical uses: feeding documentation into an LLM/RAG pipeline, collecting a datas
 - **JavaScript rendering** via a lazily loaded, reusable local Playwright browser (optional).
 - **Live progress** in the web UI over Server-Sent Events (SSE).
 
-## Install
+## Quick Start
+
+### 1. Local Python Setup
 
 ```bash
 python3 -m venv .venv
@@ -36,23 +39,45 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-Or install the project as a package (adds the `website-scraper` command):
+Start the Web UI server:
+
+```bash
+python main.py
+```
+
+Then open **`http://localhost:5000`** in your browser.
+
+You can customize the host and port:
+
+```bash
+python main.py --port 8080 --host 127.0.0.1
+```
+
+Or install the package locally:
 
 ```bash
 pip install -e .
+website-scraper
 ```
 
-## Run with Docker
+### 2. Run with Docker
 
 No Python setup needed. The image bundles Python, all dependencies, and Chromium
-for JavaScript rendering. Build it from this folder:
+for JavaScript rendering.
 
 ```bash
+# Build and run
 docker build -t website-scraper .
 docker run -d --name website-scraper \
   -p 5000:5000 \
   -v "$(pwd)/output:/app/output" \
   website-scraper
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up -d --build
 ```
 
 Open **`http://localhost:5000`** *(use `localhost` or `127.0.0.1`, not `0.0.0.0`, as modern browsers block 0.0.0.0)*. Scraped files appear in `./output` on your machine.
@@ -64,134 +89,52 @@ docker pull devansh-kumar-saini/website-scraper:latest   # Docker Hub
 docker pull ghcr.io/devansh-kumar-saini/web-scrapper:latest  # GitHub Container Registry
 ```
 
-Run the CLI or Docker Compose:
+See [docs/DOCKER.md](docs/DOCKER.md) for the full Docker guide.
 
-```bash
-# CLI inside the container
-docker run --rm -v "$(pwd)/output:/app/output" website-scraper \
-  python main.py --url https://example.com --format md --depth 1
+---
 
-# Or with Docker Compose
-docker compose up -d --build
-```
+## Web UI Dashboard
 
-See [docs/DOCKER.md](docs/DOCKER.md) for the full guide, including how to publish your own
-free image and automate multi-architecture builds.
+The Web UI provides complete visual control over all scraping capabilities:
 
-## Command-Line Interface (CLI)
+1. **Crawl Setup**:
+   - Seed URLs input with quick test samples.
+   - Crawl limits: depth (0 to 5), max pages cap, concurrency workers, and request delay.
+   - Domain boundaries: stay on seed domain(s) or allow external links.
+   - Sitemap integration: automatic detection or custom sitemap URL.
+   - Phase 6 Resilience controls: Incremental delta crawling, SQLite checkpoint queue, adaptive rate limiting, and optional Dead-Letter Queue (DLQ).
+   - Impersonation & proxy: TLS fingerprinting (`chrome`, `safari`, `firefox`) and HTTP/SOCKS proxy routing.
 
-```bash
-# Plain text output (default)
-python main.py --url https://example.com --depth 1
+2. **Extraction Settings**:
+   - Primary output formats: Text, Markdown, JSON, JSONL, CSV, SQLite.
+   - Content and exclusion selectors (CSS or XPath).
+   - Structured schema mapping (custom JSON field definitions).
+   - RAG chunking: character chunk size and chunk overlap.
 
-# Markdown output, ready for an LLM/RAG pipeline
-python main.py --url https://docs.example.com --format md --output-dir ./scraped-docs
+3. **URL Filters & Scope**:
+   - Include / exclude URL patterns (supports shell globs and `re:` regular expressions).
+   - Interactive live URL test box to test patterns before running.
 
-# Only follow docs links, skip login/cart/tag pages
-python main.py --url https://example.com --depth 3 \
-  --include-pattern "*/docs/*" --exclude-pattern "*login*" --exclude-pattern "*cart*"
+4. **Media Extractor**:
+   - Enable media cataloging and local downloading.
+   - Filter by asset types: Images, PDFs, Documents, Presentations, Videos.
+   - Select modes: Scraped pages + Media, or Media-only.
 
-# Extract only the article body and strip UI chrome
-python main.py --url https://blog.example.com/post --format md \
-  --selector "article" --exclude-selector "aside, .advertisement, .cookie-banner"
+5. **Live Monitor & Terminal**:
+   - Real-time page discovery and progress telemetry over SSE.
+   - Color-coded log streaming with search and log level filters.
+   - Dead-Letter Queue (DLQ) retry panel: view categorized failures (HTTP 429, 5xx, timeouts) and retry failed URLs with 1 click.
 
-# XPath selectors (prefix with xpath: or start with //)
-python main.py --url https://example.com --format md \
-  --selector "xpath://main" --exclude-selector "//nav"
+6. **Saved Pages & Output Catalog**:
+   - In-app preview of saved Markdown, text, and JSON documents.
+   - Media gallery and manifest browser.
+   - 1-click ZIP export with on-the-fly format conversion (Markdown, JSON, CSV, SQLite).
 
-# Structured schema extraction into a custom set of fields
-python main.py --url https://shop.example.com/product --format json \
-  --schema '{"title": "h1", "price": {"selector": ".price", "attr": "content"}, "images": {"selector": ".gallery img", "attr": "src", "all": true}}'
-
-# CSV or SQLite output
-python main.py --url https://docs.example.com --format csv --output-dir ./dataset
-python main.py --url https://docs.example.com --format sqlite --output-dir ./dataset
-
-# Extract all media links (images, PDFs, docs, PPTs, videos) into JSON and CSV manifests
-python main.py --url https://example.com --depth 2 --extract-media
-
-# Media-only crawl: only discover and catalog media assets (skips saving page text/md files)
-python main.py --url https://example.com --depth 2 --media-only
-
-# Extract and download binary media files locally to output/media/<category>/
-python main.py --url https://example.com --extract-media --download-media --media-types "pdf,video,image"
-
-# JSONL with overlapping chunks for a vector database
-python main.py --url https://docs.example.com --format jsonl --chunk-size 4000 --chunk-overlap 400
-
-# Multiple seeds and a custom page cap
-python main.py --url https://a.com,https://b.com --depth 2 --max-pages 50
-
-# Allow outbound links
-python main.py --url https://example.com --depth 2 --no-same-domain
-
-# Launch the web UI
-python main.py --ui --port 8080
-
-# Interactive mode (prompts for settings)
-python main.py
-```
-
-### CLI Options
-
-| Flag | Description | Default |
-|---|---|---|
-| `--url` | Target URL(s); repeat the flag or separate with commas | Interactive if omitted |
-| `--depth` | Traversal depth limit (0 to 5) | `1` |
-| `--max-pages` | Maximum pages to fetch | `100` |
-| `--same-domain` / `--no-same-domain` | Restrict crawling to seed domain(s) | `True` |
-| `--format` | Output format: `txt`, `md`, `json`, `jsonl`, `csv`, `sqlite` | `txt` |
-| `--include-pattern` | Only follow URLs matching a glob or `re:` regex; repeatable | None |
-| `--exclude-pattern` | Skip URLs matching a glob or `re:` regex; repeatable | None |
-| `--selector` | Extract only within the first matching CSS or XPath selector | Whole page |
-| `--exclude-selector` | Strip matching CSS or XPath elements before extraction; repeatable | None |
-| `--schema` | JSON map of custom fields to selectors | None |
-| `--schema-file` | Path to a JSON file containing a schema selector map | None |
-| `--chunk-size` | Emit chunks of this many characters; `0` disables | `0` |
-| `--chunk-overlap` | Overlap between chunks in characters | `400` |
-| `--respect-robots` / `--no-respect-robots` | Enforce `robots.txt` | `True` |
-| `--concurrency` | Concurrent fetch workers | `5` |
-| `--delay` | Per-domain politeness delay in seconds | `0.2` |
-| `--incremental` | Delta crawl: only re-fetch/write changed pages (SHA-256 + ETag/Last-Mod) | `False` |
-| `--resume` | Resume an interrupted crawl from its local SQLite checkpoint (`<job-id>`) | None |
-| `--retry-failed` | Requeue only DLQ URLs from a checkpointed job and resume it (`<job-id>`) | None |
-| `--list-failures` | Print the dead-letter queue for a job and exit | None |
-| `--checkpoint` / `--no-checkpoint` | Persist crawl queue & visited state to SQLite | `True` |
-| `--max-retries` | Total attempts per URL before moving to DLQ | `2` |
-| `--adaptive-rate-limit` | Per-domain backoff on 429/5xx & circuit breaking | `True` |
-| `--sitemap` / `--no-sitemap` | Discover URLs from `sitemap.xml` | `False` |
-| `--sitemap-url` | Explicit sitemap URL to crawl | None |
-| `--impersonate` | `curl_cffi` TLS fingerprint (`chrome`, `safari`, `firefox`, `none`) | None |
-| `--proxy` | Route requests through an HTTP/SOCKS proxy | None |
-| `--stdout` | Print extracted content to stdout (pipe-friendly) | `False` |
-| `--json` | Print the structured JSON document to stdout | `False` |
-| `--render-js` | Force Playwright rendering for every page | `False` |
-| `--extract-media` | Discover media links into `media_manifest.json` and `media_manifest.csv` | `False` |
-| `--media-mode` | Media output mode: `both` (scraped pages + media) or `media-only` | `both` |
-| `--media-only` | Shortcut for `--extract-media --media-mode media-only` | `False` |
-| `--download-media` | Download discovered media files locally to `<output-dir>/media/<category>/` | `False` |
-| `--media-types` | Comma-separated media categories: `image`, `pdf`, `doc`, `ppt`, `video` | All |
-| `--dry-run` | List target URLs without downloading page bodies | `False` |
-| `--webhook` | POST a crawl summary to this URL when the job finishes | None |
-| `--config` | Load defaults from `.scraperrc` / `scraper.json` | None |
-| `--output-dir` | Folder for output files | `./output` |
-| `--ui` | Launch the web UI | `False` |
-| `--port` | Web UI port | `5000` |
-| `--host` | Web UI host | `127.0.0.1` |
-
-### URL pattern syntax
-
-Patterns are shell globs matched against the full URL and its path:
-
-- `*/docs/*` — documentation paths on any domain.
-- `*login*`, `*cart*`, `*/tag/*`, `*.pdf` — common exclusions.
-- `re:/docs/\d+$` — use a Python regular expression by prefixing with `re:`.
-
-Exclude patterns always win over include patterns. Filters apply to discovered links; seed URLs are always crawled. Same-domain filtering still applies when enabled.
+---
 
 ## Instant Single-Page Scrape API
 
-Start the server (`python main.py --ui`) and scrape one URL synchronously — no crawl job, no polling:
+Start the server (`python main.py`) and scrape one URL synchronously — no crawl job, no polling:
 
 ```bash
 curl -X POST http://localhost:5000/api/scrape \
@@ -225,7 +168,7 @@ Error responses are JSON with `error` and `code` fields (`robots_disallowed`, `n
 
 ### Batch crawl API
 
-The existing job API is unchanged:
+The REST endpoints driving the Web UI:
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -233,16 +176,28 @@ The existing job API is unchanged:
 | `/api/scrape/stop` | POST | Stop the active crawl |
 | `/api/scrape/status` | GET | Current job snapshot |
 | `/api/scrape/events` | GET | SSE progress/log stream |
+| `/api/scrape/failures` | GET | Dead-letter queue failed URLs |
+| `/api/jobs/:id/retry-failures` | POST | Requeue and retry DLQ URLs |
+| `/api/jobs/:id/resume` | POST | Resume interrupted crawl from checkpoint |
 | `/api/results` | GET | List saved pages from `index.json` |
 | `/api/results/file` | GET | Preview one saved file |
 | `/api/results/download` | GET | Download output directory as ZIP (`?format=md\|txt\|json\|jsonl\|csv\|sqlite` converts first) |
 | `/api/results/clear` | POST | Delete files in the output directory |
 
-`POST /api/scrape/start` also accepts `format`, `include_patterns`, `exclude_patterns`, `target_selector`, `exclude_selectors`, `schema`, `chunk_size`, `chunk_overlap`, `concurrency`, `delay`, `sitemap`, `proxy`, and `webhook_url`. A configured webhook receives `crawl.completed`, `crawl.stopped`, or `crawl.failed` with page stats and saved file metadata.
+`POST /api/scrape/start` accepts:
+- `urls`, `sitemap`, `sitemap_url`
+- `depth`, `max_pages`, `same_domain`, `concurrency`, `delay`
+- `format`, `target_selector`, `exclude_selectors`, `schema`
+- `chunk_size`, `chunk_overlap`, `include_patterns`, `exclude_patterns`
+- `incremental`, `checkpoint`, `adaptive_rate_limit`, `max_retries`, `dlq`
+- `extract_media`, `media_mode`, `download_media`, `media_types`
+- `render_js`, `impersonate`, `proxy`, `webhook_url`
+
+---
 
 ## Python Library
 
-The core is importable without going through the CLI or server:
+The core crawler is also importable directly in Python:
 
 ```python
 from Backend import Crawler, scrape_url
@@ -268,28 +223,11 @@ for page in crawler.crawl(["https://example.com"]):
     print(page.depth, page.url, page.title)
 ```
 
-## Web UI
-
-```bash
-python main.py --ui
-```
-
-Open **`http://127.0.0.1:5000`**.
-
-UI features:
-
-- Seed URLs, depth slider, page cap, and same-domain toggle.
-- **Advanced extraction** panel for output format, content/exclude selectors (CSS or XPath), schema fields, and include/exclude URL patterns.
-- **Single URL Inspector** with live selector preview: tweak target/exclude CSS or XPath selectors and schema JSON, and the Markdown, text, JSON, and HTML tabs refresh automatically.
-- Live cached/saved/skipped counters and a streamed log console.
-- Click any saved page to preview its extracted content (works for TXT, Markdown, JSON, and CSV).
-- ZIP download in the original format or converted on demand to Markdown, plain text, JSON, JSONL, CSV, or SQLite.
-- Optional webhook callback that POSTs a crawl summary to your own backend on completion.
-- Native folder picker (macOS, Windows, Linux) when running locally.
+---
 
 ## Output Formats
 
-Every page gets a structured record in memory with these fields:
+Every page gets a structured record with these fields:
 
 ```json
 {
@@ -313,7 +251,7 @@ Every page gets a structured record in memory with these fields:
 }
 ```
 
-| `--format` | Files written |
+| Format | Files written |
 |---|---|
 | `txt` | `<page>.txt` with a metadata header and readable text |
 | `md` | `<page>.md` with YAML front matter and GitHub-Flavored Markdown |
@@ -324,28 +262,7 @@ Every page gets a structured record in memory with these fields:
 
 The output directory also contains `index.json` (manifest of saved pages) and `scrape_log.txt` (crawler events and skipped-resource reasons).
 
-### Schema extraction
-
-`--schema` (or `schema` in the API/library) maps custom field names to selectors:
-
-```json
-{
-  "title": "h1",
-  "price": {"selector": ".price", "attr": "content"},
-  "gallery": {"xpath": "//div[@class='gallery']//img", "attr": "src", "all": true}
-}
-```
-
-- A plain string is treated as a selector and returns the element text.
-- Objects accept `selector`, `css`, or `xpath`, plus optional `attr` (read an attribute and resolve `href`/`src` against the page URL) and `all` (return every match as a list).
-- XPath is used automatically when the selector starts with `xpath:`, `//`, `.//`, `(//`, `(.//`, or `./`.
-- Results are stored in the page's `schema` field and as a JSON column in CSV/SQLite output.
-
-### Chunking
-
-`--chunk-size` is measured in characters, not tokens (a rough approximation is four characters per token). Chunks split on paragraph boundaries when possible and include `--chunk-overlap` characters of context from the previous chunk. A size of `4000` with an overlap of `400` is a practical starting point for RAG.
-
-The test suite covers the folder picker and output directory handling plus phases 1–3: Markdown/metadata extraction, CSS and XPath selectors, schema extraction, URL filters, all output formats (including CSV/SQLite conversion), robots.txt handling, the single-page API, and webhooks.
+---
 
 ## License
 

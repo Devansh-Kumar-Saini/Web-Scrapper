@@ -5,7 +5,7 @@
 FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="Website Scraper" \
-      org.opencontainers.image.description="Free, self-hosted website scraper with Markdown/JSON output, CLI, REST API and web UI." \
+      org.opencontainers.image.description="Free, self-hosted website scraper with Markdown/JSON output, REST API and web UI." \
       org.opencontainers.image.url="https://github.com/Devansh-Kumar-Saini/Web-Scrapper" \
       org.opencontainers.image.source="https://github.com/Devansh-Kumar-Saini/Web-Scrapper" \
       org.opencontainers.image.licenses="MIT"

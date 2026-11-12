@@ -66,15 +66,9 @@ docker start website-scraper       # start again
 docker rm -f website-scraper       # remove the container
 ```
 
-### 1.4 Use the CLI or API inside the container
-
+### 1.4 Test the API or Web UI
+ 
 ```bash
-# CLI: scrape Markdown into ./output on the host
-docker run --rm \
-  -v "$(pwd)/output:/app/output" \
-  website-scraper:latest \
-  python main.py --url https://example.com --format md --depth 1
-
 # One-off API request against the running container
 curl "http://localhost:5000/api/scrape?url=https://example.com&format=markdown"
 ```

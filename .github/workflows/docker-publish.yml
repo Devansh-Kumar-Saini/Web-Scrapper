@@ -45,10 +45,9 @@ jobs:
       - name: Run unit & integration test suite
         run: timeout 300 python -m unittest discover tests
 
-      - name: Smoke test CLI
+      - name: Verify Web UI Server Options
         run: |
           timeout 60 python main.py --help
-          timeout 180 python main.py --url https://example.com --dry-run
 
       - name: Test Local Web Server Startup & Health
         run: |
@@ -82,10 +81,9 @@ jobs:
       - name: Build Docker Image
         run: docker build -t website-scraper:test .
 
-      - name: Test CLI inside container
+      - name: Verify Server Options inside container
         run: |
           timeout 120 docker run --rm website-scraper:test python main.py --help
-          timeout 300 docker run --rm website-scraper:test python main.py --url https://example.com --dry-run
 
       - name: Start Container with Port Mapping
         run: |

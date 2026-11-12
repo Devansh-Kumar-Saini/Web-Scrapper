@@ -5,8 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from Backend.app import app, _is_container
-from Backend.cli import parse_args
+from Backend.app import app, _is_container, main
 
 
 class TestServerEndpoints(unittest.TestCase):
@@ -54,18 +53,11 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertTrue(callable(app))
         self.assertTrue(hasattr(app, "wsgi_app"))
 
-    def test_cli_parsing_for_ui_and_scraper(self) -> None:
-        """CLI arguments for launching the UI or running scraping jobs must parse reliably."""
-        ui_args = parse_args(["--ui", "--port", "8080", "--host", "127.0.0.1"])
-        self.assertTrue(ui_args.ui)
-        self.assertEqual(ui_args.port, 8080)
-        self.assertEqual(ui_args.host, "127.0.0.1")
-
-        cli_args = parse_args(["--url", "https://example.com", "--dry-run", "--format", "md"])
-        self.assertFalse(cli_args.ui)
-        self.assertEqual(cli_args.url, ["https://example.com"])
-        self.assertTrue(cli_args.dry_run)
-        self.assertEqual(cli_args.format, "md")
+    @patch("Backend.app.run_server")
+    def test_server_entrypoint_args(self, mock_run_server) -> None:
+        """Main entry point must accept host and port parameters to launch the web UI."""
+        main(["--port", "8080", "--host", "0.0.0.0", "--debug"])
+        mock_run_server.assert_called_once_with(host="0.0.0.0", port=8080, debug=True)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Command-line entry point for the website content scraper."""
+"""Entry point for Web Scraper Studio Web UI."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ if str(ROOT_DIR) not in sys.path:
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from Backend.cli import main, parse_args, run  # noqa: E402
+from Backend.app import app, main, run_server  # noqa: E402
 
-__all__ = ["main", "parse_args", "run"]
+__all__ = ["app", "main", "run_server"]
 
 if __name__ == "__main__":
     raise SystemExit(main())

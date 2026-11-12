@@ -119,7 +119,7 @@ def _as_int(value: Any, default: int) -> int:
 
 
 def _normalize_output_format(value: Any) -> str | None:
-    """Accept both CLI (txt/md) and API-friendly (text/markdown) format names."""
+    """Accept both short (txt/md) and full (text/markdown) format names."""
     fmt = str(value or "txt").strip().lower()
     aliases = {
         "text": "txt",
@@ -1175,14 +1175,14 @@ class JobManager:
                 if store is not None:
                     self.log(
                         "INFO",
-                        f"Resume later with job id '{job_id}' (CLI: --resume {job_id}).",
+                        f"Resume later from the UI with job id '{job_id}'.",
                     )
             else:
                 self.log("INFO", f"Crawl completed successfully! Saved {saved_count} pages.")
             if failure_rows:
                 self.log(
                     "WARN",
-                    f"Dead-letter queue contains {len(failure_rows)} URL(s). Retry them from the UI or CLI.",
+                    f"Dead-letter queue contains {len(failure_rows)} URL(s). Retry them from the Live Monitor.",
                 )
             self._notify_webhook(
                 "crawl.stopped" if stopped else "crawl.completed",
@@ -2072,11 +2072,18 @@ def run_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = False) -
     app.run(host=host, port=port, debug=debug)
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     import argparse
-    parser = argparse.ArgumentParser(description="Website Scraper Web UI Server")
+
+    parser = argparse.ArgumentParser(description="Web Scraper Studio Web UI Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=5000, help="Port (default: 5000)")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    args = parser.parse_args()
+    parser.add_argument("--ui", action="store_true", help="Launch web UI (default behavior)")
+    args = parser.parse_args(argv)
     run_server(host=args.host, port=args.port, debug=args.debug)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

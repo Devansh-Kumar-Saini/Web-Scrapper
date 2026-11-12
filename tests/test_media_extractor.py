@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from Backend.cli import build_parser, parse_args
 from Backend.extractor import PageContent, extract_structured
 from Backend.media import (
     ALL_MEDIA_EXTENSIONS,
@@ -215,16 +214,6 @@ class TestMediaExtractor(unittest.TestCase):
         urls = {m["media_url"] for m in doc.media}
         self.assertIn("https://example.com/file.pdf", urls)
         self.assertIn("https://example.com/photo.jpg", urls)
-
-    def test_cli_parser_media_options(self) -> None:
-        parser = build_parser()
-        args = parse_args(["--url", "https://example.com", "--extract-media", "--download-media", "--media-types", "pdf,video"])
-        self.assertTrue(args.extract_media)
-        self.assertTrue(args.download_media)
-        self.assertEqual(args.media_types, "pdf,video")
-
-        args_only = parse_args(["--url", "https://example.com", "--media-only"])
-        self.assertTrue(args_only.media_only)
 
     def test_api_media_endpoint(self) -> None:
         from Backend.app import app
